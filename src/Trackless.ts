@@ -5,7 +5,6 @@ import { CircuitBreaker } from "./circuitBreaker.js";
 import { detectContext } from "./context.js";
 import { SessionManager } from "./session.js";
 import { FunnelTracker } from "./funnel.js";
-import { sanitizeProperties } from "./piiGuard.js";
 import { sendPayload } from "./http.js";
 
 export type { TracklessConfig } from "./types.js";
@@ -20,10 +19,10 @@ export type {
 
 /**
  * Event name validation regex.
- * Lowercase alphanumeric, dots (at most one, for grouping), underscores, hyphens.
- * 1-100 characters.
+ * Lowercase alphanumeric, dots (for hierarchical grouping), underscores, hyphens.
+ * 1-100 characters. No leading/trailing/consecutive dots.
  */
-const EVENT_NAME_REGEX = /^[a-z0-9_-]+(\.[a-z0-9_-]+)?$/;
+const EVENT_NAME_REGEX = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/;
 const EVENT_NAME_MAX_LENGTH = 100;
 
 /** Default flush interval: 60 seconds */
@@ -228,26 +227,6 @@ export class Trackless {
     }
   }
 
-  /** Record a generic event with optional properties. Properties are PII-guarded. */
-  static event(name: string, properties?: Record<string, string>): void {
-    try {
-      if (!Trackless.canRecord()) return;
-      const normalized = Trackless.normalizeName(name);
-      if (!normalized) return;
-
-      Trackless.session.recordActivity();
-      const sanitized = sanitizeProperties(properties);
-      Trackless.addEvent({
-        type: "event",
-        name: normalized,
-        ...(sanitized ? { properties: sanitized } : {}),
-      });
-      Trackless.checkFlushThreshold();
-    } catch {
-      // Never throws
-    }
-  }
-
   /** Force flush pending events to the ingest endpoint. */
   static async flush(): Promise<void> {
     try {
@@ -334,7 +313,7 @@ export class Trackless {
         type: "session",
         name: "end",
         duration: result.duration,
-        count: result.depth,
+        stepIndex: result.depth,
       });
     }
   }

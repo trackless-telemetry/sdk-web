@@ -10,7 +10,6 @@ import type { TracklessConfig } from "../src/types.js";
 import { EventBuffer } from "../src/eventBuffer.js";
 import { CircuitBreaker } from "../src/circuitBreaker.js";
 import { FunnelTracker } from "../src/funnel.js";
-import { sanitizeProperties } from "../src/piiGuard.js";
 import { SessionManager } from "../src/session.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -406,7 +405,6 @@ describe("No Exceptions", () => {
     expect(() => Trackless.selection("choice", "a")).not.toThrow();
     expect(() => Trackless.performance("metric", 100)).not.toThrow();
     expect(() => Trackless.error("crash")).not.toThrow();
-    expect(() => Trackless.event("generic")).not.toThrow();
     expect(() => Trackless.funnel("checkout", "step1")).not.toThrow();
   });
 
@@ -597,7 +595,7 @@ describe("Error Callback", () => {
   });
 });
 
-// ─── 11. Typed Events (7 tests) ─────────────────────────────────────────────
+// ─── 11. Typed Events (6 tests) ─────────────────────────────────────────────
 
 describe("Typed Events", () => {
   it("screen() records screen type event", async () => {
@@ -696,20 +694,6 @@ describe("Typed Events", () => {
     });
   });
 
-  it("event() records generic event with sanitized properties", async () => {
-    configure();
-    await Trackless.flush();
-    fetchSpy.mockClear();
-
-    Trackless.event("purchase", { category: "electronics", brand: "acme" });
-    await Trackless.flush();
-
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
-    const genericEvent = body.events.find((e: any) => e.type === "event");
-    expect(genericEvent).toBeDefined();
-    expect(genericEvent.name).toBe("purchase");
-    expect(genericEvent.properties).toEqual({ category: "electronics", brand: "acme" });
-  });
 });
 
 // ─── 12. Session Management (4 tests) ───────────────────────────────────────
@@ -798,53 +782,7 @@ describe("Funnel Tracking", () => {
   });
 });
 
-// ─── 14. PII Guard (5 tests) ────────────────────────────────────────────────
-
-describe("PII Guard", () => {
-  it("strips blocked keys", () => {
-    const result = sanitizeProperties({
-      email: "test@test.com",
-      category: "electronics",
-    });
-    expect(result).toEqual({ category: "electronics" });
-  });
-
-  it("strips values matching PII patterns", () => {
-    const result = sanitizeProperties({
-      contact: "user@example.com",
-      color: "blue",
-    });
-    expect(result).toEqual({ color: "blue" });
-  });
-
-  it("enforces max 10 properties", () => {
-    const props: Record<string, string> = {};
-    for (let i = 0; i < 15; i++) {
-      props[`key_${i}`] = `value_${i}`;
-    }
-    const result = sanitizeProperties(props);
-    expect(Object.keys(result!).length).toBe(10);
-  });
-
-  it("truncates long keys and values", () => {
-    const result = sanitizeProperties({
-      ["a".repeat(100)]: "b".repeat(300),
-    });
-    const keys = Object.keys(result!);
-    expect(keys[0].length).toBe(50);
-    expect(result![keys[0]].length).toBe(200);
-  });
-
-  it("returns undefined when all properties are stripped", () => {
-    const result = sanitizeProperties({
-      email: "test@test.com",
-      phone: "555-123-4567",
-    });
-    expect(result).toBeUndefined();
-  });
-});
-
-// ─── 15. Payload Structure (3 tests) ────────────────────────────────────────
+// ─── 14. Payload Structure (3 tests) ─────────────────────────────────────────
 
 describe("Payload Structure", () => {
   it("payload includes date, environment, context, and events", async () => {

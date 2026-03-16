@@ -9,7 +9,7 @@ const MAX_EVENTS_PER_FLUSH = 100;
 /**
  * Event buffer with client-side rollup.
  *
- * Count-aggregatable events (feature, screen, error, selection, event, session duration)
+ * Count-aggregatable events (feature, screen, error, selection, session duration)
  * are rolled up by key. Performance events append to durations[].
  * Non-aggregatable events (funnel, session start/end) are appended individually.
  */
@@ -143,8 +143,6 @@ export class EventBuffer {
         return `${event.type}|${event.name}|${event.option ?? ""}`;
       case "performance":
         return `${event.type}|${event.name}`;
-      case "event":
-        return `${event.type}|${event.name}|${JSON.stringify(event.properties ?? {})}`;
       case "session":
         // session duration events are aggregatable by name
         return `${event.type}|${event.name}`;

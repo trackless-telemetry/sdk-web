@@ -262,38 +262,41 @@ try {
 
 **When to use:** Caught exceptions, failed API calls, validation errors, any error condition you want to trend.
 
-### Custom Events with Properties
-
-Record arbitrary events with up to 10 key-value properties:
-
-```typescript
-Trackless.event("search", { query_length: "3", result_count: "42" });
-Trackless.event("file_upload", { file_type: "png", size_bucket: "1mb-5mb" });
-Trackless.event("share", { method: "email", content_type: "article" });
-```
-
-**Property rules:**
-
-- Max 10 properties per event
-- Keys: letters, numbers, underscores only (`/^[a-zA-Z_][a-zA-Z0-9_]{0,39}$/`), max 40 chars
-- Values: strings only, max 100 chars
-- **PII is automatically detected and redacted** — email addresses, phone numbers, IP addresses, and UUIDs in values are replaced with `[REDACTED]`. Keys matching common PII names (`email`, `phone`, `name`, `address`, `userId`, `password`, `token`, `ip`, `ssn`) are stripped entirely.
-
-**When to use:** Any event where you need dimensional breakdown beyond what the typed events provide. Use sparingly — prefer the typed methods above.
-
 ## 4. Event Naming Rules
 
-All event names (screen, feature, funnel, selection, performance, error, custom event) follow the same rules:
+All event names (screen, feature, funnel, selection, performance, error) follow the same rules:
 
 | Rule               | Detail                                                                   |
 | ------------------ | ------------------------------------------------------------------------ |
+| **Auto-lowercase** | Names are automatically lowercased — `Export_Clicked` becomes `export_clicked` |
 | **Characters**     | Lowercase `a-z`, digits `0-9`, underscores `_`, hyphens `-`, dots `.`    |
 | **Length**         | 1–100 characters                                                         |
-| **Dots**           | At most one dot for single-level grouping (e.g., `settings.theme`)       |
+| **Dots**           | Dots allowed for hierarchical grouping (e.g., `settings.theme`, `nav.settings.display`) |
 | **No identifiers** | UUIDs, long hex strings, and numeric-only strings >12 chars are rejected |
 
-**Valid:** `checkout_started`, `settings.dark_mode`, `photo-upload`, `api_v2_call`
-**Invalid:** `Checkout_Started` (uppercase), `user 123` (space), `a.b.c` (multiple dots)
+**Valid:** `checkout_started`, `settings.dark_mode`, `photo-upload`, `nav.settings.display`
+**Also valid (auto-lowercased):** `Export_Clicked` → `export_clicked`, `Settings.Theme` → `settings.theme`
+**Invalid:** `user 123` (space), `.leading-dot` (leading dot), `export!clicked` (special characters)
+
+### Hierarchical Grouping with Dots
+
+Use `.` delimiters to create hierarchical event names. The dashboard groups **feature** events by the first dot segment and shows donut charts with the distribution of values within each group.
+
+```typescript
+// These create a "theme" group in the dashboard with "dark" and "light" values
+Trackless.feature("theme.dark");
+Trackless.feature("theme.light");
+
+// Deeper hierarchies work too — grouped by first segment ("settings")
+Trackless.feature("settings.display.theme");
+Trackless.feature("settings.display.layout");
+Trackless.feature("settings.notifications");
+```
+
+**Which types support grouping?** Dots are allowed in names for all event types, but the dashboard's automatic group visualization (donut charts) currently applies to **`feature`** events only. For other use cases, consider the typed alternatives:
+
+- Instead of `feature("theme.dark")` / `feature("theme.light")` → use `selection("theme", "dark")` for choice-from-a-set scenarios
+- Use `feature` with dots when you want the dashboard group charts, or when the variants aren't mutually exclusive choices
 
 ## 5. Session Lifecycle
 
