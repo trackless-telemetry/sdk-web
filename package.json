@@ -1,0 +1,51 @@
+{
+  "name": "@trackless-telemetry/sdk-web",
+  "version": "0.1.1",
+  "description": "Privacy-first web analytics SDK — zero dependencies, zero cookies, zero client persistence. Collects only aggregate feature usage counts.",
+  "keywords": [
+    "analytics",
+    "telemetry",
+    "privacy",
+    "privacy-first",
+    "gdpr",
+    "ccpa",
+    "no-cookies",
+    "cookieless",
+    "web-analytics",
+    "tracking",
+    "usage-analytics",
+    "zero-dependency"
+  ],
+  "homepage": "https://tracklesstelemetry.com/docs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/trackless-telemetry/sdk-web.git"
+  },
+  "license": "MIT",
+  "author": "Camp Four Software <hello@campfoursoftware.com> (https://campfoursoftware.com)",
+  "type": "module",
+  "main": "dist/trackless.umd.cjs",
+  "module": "dist/trackless.es.js",
+  "types": "dist/types.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/trackless.es.js",
+      "require": "./dist/trackless.umd.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "GUIDE.md",
+    ".cursorrules"
+  ],
+  "scripts": {
+    "build": "vite build && tsc --emitDeclarationOnly",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5",
+    "vite": "^6",
+    "vitest": "^3"
+  }
+}
