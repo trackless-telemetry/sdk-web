@@ -24,17 +24,18 @@ Trackless.configure({
 
 ### Configuration Options
 
-| Option               | Type                        | Default        | Description                                   |
-| -------------------- | --------------------------- | -------------- | --------------------------------------------- |
-| `apiKey`             | `string`                    | **required**   | API key with `tl_` prefix                     |
-| `endpoint`           | `string`                    | `"https://api.tracklesstelemetry.com"` | Ingest endpoint URL          |
-| `environment`        | `"sandbox" \| "production"` | `"production"` | Set to `"sandbox"` for development/staging    |
-| `enabled`            | `boolean`                   | `true`         | Set `false` to disable all recording          |
-| `appVersion`         | `string`                    | `undefined`    | Your app's version (e.g., `"2.1.0"`)          |
-| `buildNumber`        | `string`                    | `undefined`    | Your app's build number (e.g., `"142"`)       |
-| `autoScreenTracking` | `boolean`                   | `false`        | Auto-track SPA route changes as screen events |
-| `onError`            | `(error: Error) => void`    | no-op          | Error callback for debugging                  |
-| `flushIntervalMs`    | `number`                    | `60000`        | Flush interval in milliseconds                |
+| Option               | Type                        | Default                                | Description                                   |
+| -------------------- | --------------------------- | -------------------------------------- | --------------------------------------------- |
+| `apiKey`             | `string`                    | **required**                           | API key with `tl_` prefix                     |
+| `endpoint`           | `string`                    | `"https://api.tracklesstelemetry.com"` | Ingest endpoint URL                           |
+| `environment`        | `"sandbox" \| "production"` | `"production"`                         | Set to `"sandbox"` for development/staging    |
+| `enabled`            | `boolean`                   | `true`                                 | Set `false` to disable all recording          |
+| `appVersion`         | `string`                    | `undefined`                            | Your app's version (e.g., `"2.1.0"`)          |
+| `buildNumber`        | `string`                    | `undefined`                            | Your app's build number (e.g., `"142"`)       |
+| `autoScreenTracking` | `boolean`                   | `false`                                | Auto-track SPA route changes as screen events |
+| `onError`            | `(error: Error) => void`    | no-op                                  | Error callback for debugging                  |
+| `flushIntervalMs`    | `number`                    | `60000`                                | Flush interval in milliseconds                |
+| `debugLogging`       | `boolean`                   | `false`                                | Enable debug logging to console               |
 
 ### Where to Put It
 
@@ -178,29 +179,29 @@ Trackless.feature("settings.notifications");
 
 ### Funnel Steps
 
-Track progression through multi-step flows. Steps are automatically indexed and deduplicated per session:
+Track progression through multi-step flows. Each step has a developer-defined index (0-based) that determines its position in the funnel:
 
 ```typescript
 // Checkout funnel
-Trackless.funnel("checkout", "view_cart");
-Trackless.funnel("checkout", "enter_shipping");
-Trackless.funnel("checkout", "enter_payment");
-Trackless.funnel("checkout", "confirm_order");
-Trackless.funnel("checkout", "order_complete");
+Trackless.funnel("checkout", 0, "view_cart");
+Trackless.funnel("checkout", 1, "enter_shipping");
+Trackless.funnel("checkout", 2, "enter_payment");
+Trackless.funnel("checkout", 3, "confirm_order");
+Trackless.funnel("checkout", 4, "order_complete");
 
 // Onboarding funnel
-Trackless.funnel("onboarding", "welcome");
-Trackless.funnel("onboarding", "create_account");
-Trackless.funnel("onboarding", "verify_email");
-Trackless.funnel("onboarding", "setup_profile");
+Trackless.funnel("onboarding", 0, "welcome");
+Trackless.funnel("onboarding", 1, "create_account");
+Trackless.funnel("onboarding", 2, "verify_email");
+Trackless.funnel("onboarding", 3, "setup_profile");
 ```
 
 **When to use:** Checkout flows, onboarding wizards, sign-up sequences, any multi-step process where you want to measure drop-off between steps.
 
 **Rules:**
 
-- Step names are deduplicated per session — calling the same step twice is a no-op
-- Step index is assigned automatically based on order of first occurrence
+- Step index is developer-defined (0-based) and determines the order of steps in funnel charts
+- Steps are deduplicated per session — calling the same step index twice is a no-op
 - Funnel state resets on session end
 
 ### Selections
@@ -266,13 +267,13 @@ try {
 
 All event names (screen, feature, funnel, selection, performance, error) follow the same rules:
 
-| Rule               | Detail                                                                   |
-| ------------------ | ------------------------------------------------------------------------ |
-| **Auto-lowercase** | Names are automatically lowercased — `Export_Clicked` becomes `export_clicked` |
-| **Characters**     | Lowercase `a-z`, digits `0-9`, underscores `_`, hyphens `-`, dots `.`    |
-| **Length**         | 1–100 characters                                                         |
+| Rule               | Detail                                                                                  |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| **Auto-lowercase** | Names are automatically lowercased — `Export_Clicked` becomes `export_clicked`          |
+| **Characters**     | Lowercase `a-z`, digits `0-9`, underscores `_`, hyphens `-`, dots `.`                   |
+| **Length**         | 1–100 characters                                                                        |
 | **Dots**           | Dots allowed for hierarchical grouping (e.g., `settings.theme`, `nav.settings.display`) |
-| **No identifiers** | UUIDs, long hex strings, and numeric-only strings >12 chars are rejected |
+| **No identifiers** | UUIDs, long hex strings, and numeric-only strings >12 chars are rejected                |
 
 **Valid:** `checkout_started`, `settings.dark_mode`, `photo-upload`, `nav.settings.display`
 **Also valid (auto-lowercased):** `Export_Clicked` → `export_clicked`, `Settings.Theme` → `settings.theme`
@@ -365,16 +366,16 @@ export function Checkout() {
 
   const handleSelectShipping = (method: string) => {
     Trackless.selection("shipping_method", method);
-    Trackless.funnel("checkout", "select_shipping");
+    Trackless.funnel("checkout", 1, "select_shipping");
   };
 
   const handleSubmitOrder = async () => {
-    Trackless.funnel("checkout", "submit_order");
+    Trackless.funnel("checkout", 2, "submit_order");
     const start = performance.now();
     try {
       await placeOrder();
       Trackless.performance("order_submission", (performance.now() - start) / 1000);
-      Trackless.funnel("checkout", "order_complete");
+      Trackless.funnel("checkout", 3, "order_complete");
     } catch (e) {
       Trackless.error("order_failed", "error", e instanceof Error ? e.name : "unknown");
     }

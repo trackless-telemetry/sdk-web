@@ -1,6 +1,6 @@
 {
   "name": "@trackless-telemetry/sdk-web",
-  "version": "0.1.2",
+  "version": "0.1.5",
   "description": "Privacy-first web analytics SDK — zero dependencies, zero cookies, zero client persistence. Collects only aggregate feature usage counts.",
   "keywords": [
     "analytics",
@@ -26,10 +26,10 @@
   "type": "module",
   "main": "dist/trackless.umd.cjs",
   "module": "dist/trackless.es.js",
-  "types": "dist/types.d.ts",
+  "types": "dist/Trackless.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/types.d.ts",
+      "types": "./dist/Trackless.d.ts",
       "import": "./dist/trackless.es.js",
       "require": "./dist/trackless.umd.cjs"
     }

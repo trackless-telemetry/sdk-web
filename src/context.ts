@@ -7,50 +7,63 @@ import type { EventContext } from "./types.js";
  * - NEVER sends full user agent string (Invariant 2)
  * - NEVER sends exact screen dimensions (Invariant 2)
  * - NEVER uses IP-based geolocation (Invariant 4)
- * - Region/locale derived from navigator.languages / navigator.language only
+ * - Region derived from navigator.languages / navigator.language only
  */
 export function detectContext(appVersion?: string, buildNumber?: string): EventContext {
   return {
     platform: "web",
     osVersion: detectOsVersion(),
     deviceClass: detectDeviceClass(),
-    locale: detectLocale(),
+    region: detectRegion(),
+    browser: detectBrowser(),
+    os: detectOs(),
     appVersion,
     buildNumber,
     // daysSinceInstall omitted — web has no install concept
   };
 }
 
-/** Extract major.minor OS version */
+/** Extract major OS version only */
 function detectOsVersion(): string | undefined {
   try {
     const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
     if (!ua) return undefined;
 
-    // Windows: "Windows NT 10.0" → "10.0"
+    let version: string | undefined;
+
+    // Windows: "Windows NT 10.0" → "10"
     const windowsMatch = ua.match(/Windows NT (\d+\.\d+)/);
-    if (windowsMatch) return windowsMatch[1];
+    if (windowsMatch) version = windowsMatch[1];
 
-    // macOS: "Mac OS X 10_15_7" → "10.15", "Mac OS X 14_0" → "14.0"
-    const macMatch = ua.match(/Mac OS X (\d+)[_.](\d+)/);
-    if (macMatch) return `${macMatch[1]}.${macMatch[2]}`;
-
-    // iOS: "CPU iPhone OS 17_0" or "CPU OS 17_0" → "17.0"
-    const iosMatch = ua.match(/(?:iPhone|CPU) OS (\d+)[_.](\d+)/);
-    if (iosMatch) return `${iosMatch[1]}.${iosMatch[2]}`;
-
-    // Android: "Android 14.0" or "Android 14" → "14.0" or "14"
-    const androidMatch = ua.match(/Android (\d+(?:\.\d+)?)/);
-    if (androidMatch) {
-      const v = androidMatch[1];
-      return v.includes(".") ? v : `${v}.0`;
+    // macOS: "Mac OS X 10_15_7" → "10", "Mac OS X 14_0" → "14"
+    if (!version) {
+      const macMatch = ua.match(/Mac OS X (\d+)[_.](\d+)/);
+      if (macMatch) version = `${macMatch[1]}.${macMatch[2]}`;
     }
 
-    // Chrome OS: "CrOS x86_64 14541.0.0" → "14541.0"
-    const crosMatch = ua.match(/CrOS \S+ (\d+\.\d+)/);
-    if (crosMatch) return crosMatch[1];
+    // iOS: "CPU iPhone OS 17_0" or "CPU OS 17_0" → "17"
+    if (!version) {
+      const iosMatch = ua.match(/(?:iPhone|CPU) OS (\d+)[_.](\d+)/);
+      if (iosMatch) version = `${iosMatch[1]}.${iosMatch[2]}`;
+    }
 
-    return undefined;
+    // Android: "Android 14.0" or "Android 14" → "14"
+    if (!version) {
+      const androidMatch = ua.match(/Android (\d+(?:\.\d+)?)/);
+      if (androidMatch) {
+        const v = androidMatch[1];
+        version = v.includes(".") ? v : `${v}.0`;
+      }
+    }
+
+    // Chrome OS: "CrOS x86_64 14541.0.0" → "14541"
+    if (!version) {
+      const crosMatch = ua.match(/CrOS \S+ (\d+\.\d+)/);
+      if (crosMatch) version = crosMatch[1];
+    }
+
+    const major = version?.split(".")[0];
+    return major || undefined;
   } catch {
     return undefined;
   }
@@ -81,22 +94,75 @@ function detectDeviceClass(): "phone" | "tablet" | "desktop" | undefined {
 }
 
 /**
- * Extract locale from navigator.languages[0] or navigator.language.
+ * Extract country code from navigator.languages[0] or navigator.language.
  *
- * Returns the full locale tag (e.g., "en-US", "fr-FR").
+ * Returns the country code only (e.g., "US", "FR").
  * NEVER uses IP-based geolocation (Privacy Invariant 4).
  */
-function detectLocale(): string | undefined {
+function detectRegion(): string | undefined {
   try {
-    if (typeof navigator === "undefined") return undefined;
-
-    const lang =
-      (navigator.languages && navigator.languages.length > 0
-        ? navigator.languages[0]
-        : undefined) ?? navigator.language;
-
-    return lang || undefined;
+    const lang = navigator.languages?.[0] ?? navigator.language;
+    if (lang) {
+      const parts = lang.split("-");
+      if (parts[1]) return parts[1].toUpperCase();
+    }
+    const resolved = new Intl.DateTimeFormat().resolvedOptions().locale;
+    const parts = resolved.split("-");
+    return parts[1]?.toUpperCase();
   } catch {
     return undefined;
   }
 }
+
+/**
+ * Detect browser from navigator.userAgentData (Chrome, Edge, Firefox)
+ * with Safari fallback via navigator.vendor.
+ */
+function detectBrowser(): "chrome" | "safari" | "firefox" | "edge" | "other" {
+  try {
+    const uaData = (navigator as any).userAgentData;
+    if (uaData?.brands) {
+      const brands = uaData.brands.map((b: { brand: string }) => b.brand.toLowerCase());
+      if (brands.some((b: string) => b.includes("edge") || b.includes("edg"))) return "edge";
+      if (brands.some((b: string) => b.includes("firefox"))) return "firefox";
+      if (brands.some((b: string) => b.includes("chrome") || b.includes("chromium")))
+        return "chrome";
+    }
+    // Safari fallback — Safari does not support userAgentData
+    if (navigator.vendor === "Apple Computer, Inc.") return "safari";
+    return "other";
+  } catch {
+    return "other";
+  }
+}
+
+/**
+ * Detect OS from navigator.userAgentData with UA string fallback.
+ */
+function detectOs(): "macos" | "windows" | "linux" | "android" | "ios" | "other" {
+  try {
+    const uaData = (navigator as any).userAgentData;
+    if (uaData?.platform) {
+      const p = uaData.platform.toLowerCase();
+      if (p === "macos" || p === "mac os x") return "macos";
+      if (p === "windows") return "windows";
+      if (p === "linux" || p.includes("cros")) return "linux";
+      if (p === "android") return "android";
+      if (p === "ios") return "ios";
+      return "other";
+    }
+    // UA fallback for Safari
+    const ua = navigator.userAgent;
+    if (/Mac OS X/.test(ua)) return "macos";
+    if (/Windows/.test(ua)) return "windows";
+    if (/Android/.test(ua)) return "android";
+    if (/iPhone|iPad|iPod/.test(ua)) return "ios";
+    if (/Linux|CrOS/.test(ua)) return "linux";
+    return "other";
+  } catch {
+    return "other";
+  }
+}
+
+/** @deprecated Use detectRegion() via detectContext(). Renamed in dimension redesign. */
+export const detectLocale = detectRegion;

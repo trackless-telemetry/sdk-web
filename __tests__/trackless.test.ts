@@ -405,7 +405,7 @@ describe("No Exceptions", () => {
     expect(() => Trackless.selection("choice", "a")).not.toThrow();
     expect(() => Trackless.performance("metric", 100)).not.toThrow();
     expect(() => Trackless.error("crash")).not.toThrow();
-    expect(() => Trackless.funnel("checkout", "step1")).not.toThrow();
+    expect(() => Trackless.funnel("checkout", 0, "step1")).not.toThrow();
   });
 
   it("flush() never throws (resolves silently)", async () => {
@@ -578,7 +578,7 @@ describe("Auto Screen Tracking", () => {
   });
 });
 
-// ─── 10. Error Callback (1 test) ────────────────────────────────────────────
+// ─── 10. Error Callback (2 tests) ────────────────────────────────────────────
 
 describe("Error Callback", () => {
   it("onError callback receives errors when provided", async () => {
@@ -592,6 +592,62 @@ describe("Error Callback", () => {
 
     expect(errors.length).toBe(1);
     expect(errors[0].message).toBe("Server unreachable");
+  });
+
+  it("onError receives 4xx rejection errors", async () => {
+    fetchSpy.mockResolvedValue({
+      status: 400,
+      json: () => Promise.resolve({}),
+    });
+
+    const errors: Error[] = [];
+    configure({ onError: (error) => errors.push(error) });
+
+    Trackless.feature("export_clicked");
+    await Trackless.flush();
+
+    expect(errors.length).toBe(1);
+    expect(errors[0].message).toContain("400");
+  });
+});
+
+// ─── 10b. Debug Logging (3 tests) ───────────────────────────────────────────
+
+describe("Debug Logging", () => {
+  it("debugLogging: true produces console output", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    configure({ debugLogging: true });
+    Trackless.feature("export_clicked");
+
+    const tracklessLogs = logSpy.mock.calls.filter((c) => String(c[0]).includes("[Trackless]"));
+    expect(tracklessLogs.length).toBeGreaterThanOrEqual(2); // configure + feature
+
+    logSpy.mockRestore();
+  });
+
+  it("debugLogging: false (default) produces no console output", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    configure();
+    Trackless.feature("export_clicked");
+
+    const tracklessLogs = logSpy.mock.calls.filter((c) => String(c[0]).includes("[Trackless]"));
+    expect(tracklessLogs.length).toBe(0);
+
+    logSpy.mockRestore();
+  });
+
+  it("debug warns on invalid event names", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    configure({ debugLogging: true });
+    Trackless.feature("INVALID NAME!");
+
+    const tracklessWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("[Trackless]"));
+    expect(tracklessWarns.length).toBeGreaterThanOrEqual(1);
+
+    warnSpy.mockRestore();
   });
 });
 
@@ -617,8 +673,8 @@ describe("Typed Events", () => {
     await Trackless.flush();
     fetchSpy.mockClear();
 
-    Trackless.funnel("checkout", "cart");
-    Trackless.funnel("checkout", "payment");
+    Trackless.funnel("checkout", 0, "cart");
+    Trackless.funnel("checkout", 1, "payment");
     await Trackless.flush();
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
@@ -693,7 +749,6 @@ describe("Typed Events", () => {
       code: "E001",
     });
   });
-
 });
 
 // ─── 12. Session Management (4 tests) ───────────────────────────────────────
@@ -760,25 +815,25 @@ describe("Session Management", () => {
 // ─── 13. Funnel Tracking (3 tests) ──────────────────────────────────────────
 
 describe("Funnel Tracking", () => {
-  it("FunnelTracker assigns sequential stepIndex", () => {
+  it("FunnelTracker accepts explicit step indices", () => {
     const tracker = new FunnelTracker();
-    expect(tracker.step("checkout", "cart")).toBe(0);
-    expect(tracker.step("checkout", "payment")).toBe(1);
-    expect(tracker.step("checkout", "confirm")).toBe(2);
+    expect(tracker.step("checkout", 0)).toBe(true);
+    expect(tracker.step("checkout", 1)).toBe(true);
+    expect(tracker.step("checkout", 2)).toBe(true);
   });
 
-  it("FunnelTracker deduplicates repeated steps", () => {
+  it("FunnelTracker deduplicates repeated step indices", () => {
     const tracker = new FunnelTracker();
-    expect(tracker.step("checkout", "cart")).toBe(0);
-    expect(tracker.step("checkout", "cart")).toBeNull();
+    expect(tracker.step("checkout", 0)).toBe(true);
+    expect(tracker.step("checkout", 0)).toBe(false);
   });
 
   it("FunnelTracker tracks independent funnels", () => {
     const tracker = new FunnelTracker();
-    expect(tracker.step("checkout", "cart")).toBe(0);
-    expect(tracker.step("onboarding", "welcome")).toBe(0);
-    expect(tracker.step("checkout", "payment")).toBe(1);
-    expect(tracker.step("onboarding", "profile")).toBe(1);
+    expect(tracker.step("checkout", 0)).toBe(true);
+    expect(tracker.step("onboarding", 0)).toBe(true);
+    expect(tracker.step("checkout", 1)).toBe(true);
+    expect(tracker.step("onboarding", 1)).toBe(true);
   });
 });
 

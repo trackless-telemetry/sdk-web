@@ -62,6 +62,7 @@ export class Trackless {
   private static onError: (error: Error) => void = () => {};
   private static flushIntervalMs: number = DEFAULT_FLUSH_INTERVAL_MS;
   private static autoScreenTracking: boolean = false;
+  private static debugLogging: boolean = false;
 
   private static enabled: boolean = false;
   private static destroyed = false;
@@ -91,6 +92,7 @@ export class Trackless {
       Trackless.onError = config.onError ?? (() => {});
       Trackless.flushIntervalMs = config.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
       Trackless.autoScreenTracking = config.autoScreenTracking ?? false;
+      Trackless.debugLogging = config.debugLogging ?? false;
 
       Trackless.buffer = new EventBuffer();
       Trackless.circuitBreaker = new CircuitBreaker();
@@ -100,6 +102,10 @@ export class Trackless {
       Trackless.screenViewCooldowns = new Map();
       Trackless.destroyed = false;
       Trackless.configured = true;
+
+      Trackless.debug(
+        `configured — env=${Trackless.environment} endpoint=${Trackless.endpoint} flush=${Trackless.flushIntervalMs}ms`,
+      );
 
       if (Trackless.enabled) {
         // Start session
@@ -131,6 +137,7 @@ export class Trackless {
 
       Trackless.session.recordActivity();
       Trackless.addEvent({ type: "screen", name: normalized });
+      Trackless.debug(`screen — ${normalized}`);
       Trackless.checkFlushThreshold();
     } catch {
       // Never throws
@@ -146,6 +153,7 @@ export class Trackless {
 
       Trackless.session.recordActivity();
       Trackless.addEvent({ type: "feature", name: normalized });
+      Trackless.debug(`feature — ${normalized}`);
       Trackless.checkFlushThreshold();
     } catch {
       // Never throws
@@ -153,15 +161,18 @@ export class Trackless {
   }
 
   /** Record a funnel step. */
-  static funnel(funnelName: string, stepName: string): void {
+  static funnel(funnelName: string, stepIndex: number, stepName: string): void {
     try {
       if (!Trackless.canRecord()) return;
+      if (typeof stepIndex !== "number" || !Number.isInteger(stepIndex) || stepIndex < 0) return;
       const normalizedFunnel = Trackless.normalizeName(funnelName);
       const normalizedStep = Trackless.normalizeName(stepName);
       if (!normalizedFunnel || !normalizedStep) return;
 
-      const stepIndex = Trackless.funnels.step(normalizedFunnel, normalizedStep);
-      if (stepIndex === null) return; // Duplicate step
+      if (!Trackless.funnels.step(normalizedFunnel, stepIndex)) {
+        Trackless.debug(`funnel — ${normalizedFunnel}/${normalizedStep} (duplicate, skipped)`);
+        return;
+      }
 
       Trackless.session.recordActivity();
       Trackless.addEvent({
@@ -170,6 +181,7 @@ export class Trackless {
         step: normalizedStep,
         stepIndex,
       });
+      Trackless.debug(`funnel — ${normalizedFunnel}/${normalizedStep} step=${stepIndex}`);
       Trackless.checkFlushThreshold();
     } catch {
       // Never throws
@@ -185,6 +197,7 @@ export class Trackless {
 
       Trackless.session.recordActivity();
       Trackless.addEvent({ type: "selection", name: normalized, option });
+      Trackless.debug(`selection — ${normalized} option=${option}`);
       Trackless.checkFlushThreshold();
     } catch {
       // Never throws
@@ -201,6 +214,7 @@ export class Trackless {
 
       Trackless.session.recordActivity();
       Trackless.addEvent({ type: "performance", name: normalized, duration });
+      Trackless.debug(`performance — ${normalized} duration=${duration}ms`);
       Trackless.checkFlushThreshold();
     } catch {
       // Never throws
@@ -221,6 +235,7 @@ export class Trackless {
         severity,
         ...(code ? { code } : {}),
       });
+      Trackless.debug(`error — ${normalized} severity=${severity}${code ? ` code=${code}` : ""}`);
       Trackless.checkFlushThreshold();
     } catch {
       // Never throws
@@ -239,6 +254,7 @@ export class Trackless {
   /** Toggle event recording. Disabling discards buffered data. */
   static setEnabled(enabled: boolean): void {
     try {
+      Trackless.debug(`setEnabled — ${enabled}`);
       Trackless.enabled = enabled;
       if (!enabled) {
         Trackless.buffer.clear();
@@ -261,6 +277,7 @@ export class Trackless {
   static async destroy(): Promise<void> {
     try {
       if (Trackless.destroyed) return;
+      Trackless.debug("destroying");
       Trackless.destroyed = true;
 
       Trackless.endCurrentSession();
@@ -284,6 +301,14 @@ export class Trackless {
     return Trackless.enabled && !Trackless.destroyed && Trackless.configured;
   }
 
+  private static debug(msg: string): void {
+    if (Trackless.debugLogging) console.log(`[Trackless] ${msg}`);
+  }
+
+  private static debugWarn(msg: string): void {
+    if (Trackless.debugLogging) console.warn(`[Trackless] ${msg}`);
+  }
+
   private static addEvent(event: TracklessEvent): void {
     Trackless.buffer.add(event);
   }
@@ -293,6 +318,7 @@ export class Trackless {
     const normalized = name.toLowerCase();
     if (!normalized || normalized.length > EVENT_NAME_MAX_LENGTH) return null;
     if (!EVENT_NAME_REGEX.test(normalized)) {
+      Trackless.debugWarn(`invalid event name rejected: "${name}"`);
       Trackless.onError(new Error(`Invalid event name: ${name}`));
       return null;
     }
@@ -302,6 +328,7 @@ export class Trackless {
   private static startNewSession(): void {
     if (Trackless.session.start()) {
       Trackless.addEvent({ type: "session", name: "start" });
+      Trackless.debug("session started");
     }
   }
 
@@ -315,6 +342,7 @@ export class Trackless {
         duration: result.duration,
         stepIndex: result.depth,
       });
+      Trackless.debug(`session ended — duration=${result.duration}s depth=${result.depth}`);
     }
   }
 
@@ -326,12 +354,16 @@ export class Trackless {
 
   private static async performFlush(keepalive: boolean): Promise<void> {
     if (Trackless.buffer.isEmpty) return;
-    if (!Trackless.circuitBreaker.canAttempt()) return;
+    if (!Trackless.circuitBreaker.canAttempt()) {
+      Trackless.debug("flush skipped — circuit breaker open");
+      return;
+    }
 
     const payloads = Trackless.buffer.drain(Trackless.environment, Trackless.context);
     if (payloads.length === 0) return;
 
     for (const payload of payloads) {
+      Trackless.debug(`flush — ${payload.events.length} events`);
       try {
         const result = await sendPayload(
           Trackless.endpoint,
@@ -343,13 +375,19 @@ export class Trackless {
 
         if (result.status >= 500) {
           Trackless.circuitBreaker.recordFailure();
+          Trackless.debugWarn(`flush failed — status=${result.status}`);
           Trackless.onError(new Error(`Flush failed with status ${result.status}`));
-        } else if (result.status < 400) {
+        } else if (result.status >= 400) {
+          // 4xx: discard batch, don't trigger circuit breaker
+          Trackless.debugWarn(`flush rejected — status=${result.status}`);
+          Trackless.onError(new Error(`Flush rejected with status ${result.status}`));
+        } else {
           Trackless.circuitBreaker.recordSuccess();
+          Trackless.debug(`flush success — status=${result.status}`);
         }
-        // 4xx: discard batch, don't trigger circuit breaker
       } catch (error) {
         Trackless.circuitBreaker.recordFailure();
+        Trackless.debugWarn("flush failed — network error");
         Trackless.onError(error instanceof Error ? error : new Error("Flush failed"));
       }
     }

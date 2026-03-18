@@ -27,6 +27,8 @@ export interface TracklessConfig {
   appVersion?: string;
   /** Build number string for context (optional) */
   buildNumber?: string;
+  /** Enable debug logging to console (default: false) */
+  debugLogging?: boolean;
 }
 
 /** Result from the HTTP send */

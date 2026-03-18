@@ -1,32 +1,31 @@
 /**
- * In-memory funnel step tracking per session.
+ * In-memory funnel step deduplication per session.
  *
- * Tracks which steps have been completed per funnel name within a session.
- * Provides deduplication and automatic stepIndex assignment.
+ * Tracks which step indices have been recorded per funnel name within a session.
+ * Prevents the same step from being counted twice in one session.
  * Cleared on session end.
  */
 export class FunnelTracker {
-  /** Map of funnelName -> list of completed step names (in order) */
-  private funnels: Map<string, string[]> = new Map();
+  /** Map of funnelName -> set of completed step indices */
+  private funnels: Map<string, Set<number>> = new Map();
 
   /**
-   * Record a funnel step.
+   * Check and record a funnel step for deduplication.
    *
-   * @returns stepIndex if the step was recorded, or null if it was a duplicate
+   * @returns true if the step was newly recorded, false if it was a duplicate
    */
-  step(funnelName: string, stepName: string): number | null {
+  step(funnelName: string, stepIndex: number): boolean {
     let steps = this.funnels.get(funnelName);
     if (!steps) {
-      steps = [];
+      steps = new Set();
       this.funnels.set(funnelName, steps);
     }
 
-    // Dedup — if this step was already completed, skip
-    if (steps.includes(stepName)) return null;
+    // Dedup — if this step index was already recorded, skip
+    if (steps.has(stepIndex)) return false;
 
-    const stepIndex = steps.length;
-    steps.push(stepName);
-    return stepIndex;
+    steps.add(stepIndex);
+    return true;
   }
 
   /** Clear all funnel state (call on session end). */
