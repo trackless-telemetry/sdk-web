@@ -9,7 +9,7 @@ const MAX_EVENTS_PER_FLUSH = 100;
 /**
  * Event buffer with client-side rollup.
  *
- * Count-aggregatable events (feature, screen, error, selection, session duration)
+ * Count-aggregatable events (feature, view, error, session duration)
  * are rolled up by key. Performance events append to durations[].
  * Non-aggregatable events (funnel, session start/end) are appended individually.
  */
@@ -135,12 +135,10 @@ export class EventBuffer {
   private rollupKey(event: TracklessEvent): string {
     switch (event.type) {
       case "feature":
-      case "screen":
-        return `${event.type}|${event.name}`;
+      case "view":
+        return `${event.type}|${event.name}|${event.detail ?? ""}`;
       case "error":
         return `${event.type}|${event.name}|${event.severity ?? ""}|${event.code ?? ""}`;
-      case "selection":
-        return `${event.type}|${event.name}|${event.option ?? ""}`;
       case "performance":
         return `${event.type}|${event.name}`;
       case "session":

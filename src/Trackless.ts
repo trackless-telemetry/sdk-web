@@ -51,7 +51,7 @@ const DEFAULT_ENDPOINT = "https://api.tracklesstelemetry.com";
  *   apiKey: 'tl_xxxxxxxxxxxxxxxx',
  * });
  *
- * Trackless.screen('Home');
+ * Trackless.view('home');
  * Trackless.feature('export_clicked');
  * ```
  */
@@ -128,16 +128,21 @@ export class Trackless {
     }
   }
 
-  /** Record a screen view. */
-  static screen(name: string): void {
+  /** Record a view event. */
+  static view(name: string, detail?: string): void {
     try {
       if (!Trackless.canRecord()) return;
       const normalized = Trackless.normalizeName(name);
       if (!normalized) return;
+      if (detail !== undefined && (typeof detail !== "string" || detail === "")) return;
 
       Trackless.session.recordActivity();
-      Trackless.addEvent({ type: "screen", name: normalized });
-      Trackless.debug(`screen — ${normalized}`);
+      Trackless.addEvent({
+        type: "view",
+        name: normalized,
+        ...(detail ? { detail } : {}),
+      });
+      Trackless.debug(`view — ${normalized}${detail ? ` detail=${detail}` : ""}`);
       Trackless.checkFlushThreshold();
     } catch {
       // Never throws
@@ -145,15 +150,20 @@ export class Trackless {
   }
 
   /** Record a feature usage event. */
-  static feature(name: string): void {
+  static feature(name: string, detail?: string): void {
     try {
       if (!Trackless.canRecord()) return;
       const normalized = Trackless.normalizeName(name);
       if (!normalized) return;
+      if (detail !== undefined && (typeof detail !== "string" || detail === "")) return;
 
       Trackless.session.recordActivity();
-      Trackless.addEvent({ type: "feature", name: normalized });
-      Trackless.debug(`feature — ${normalized}`);
+      Trackless.addEvent({
+        type: "feature",
+        name: normalized,
+        ...(detail ? { detail } : {}),
+      });
+      Trackless.debug(`feature — ${normalized}${detail ? ` detail=${detail}` : ""}`);
       Trackless.checkFlushThreshold();
     } catch {
       // Never throws
@@ -182,22 +192,6 @@ export class Trackless {
         stepIndex,
       });
       Trackless.debug(`funnel — ${normalizedFunnel}/${normalizedStep} step=${stepIndex}`);
-      Trackless.checkFlushThreshold();
-    } catch {
-      // Never throws
-    }
-  }
-
-  /** Record a selection event (e.g., theme preference, language choice). */
-  static selection(name: string, option: string): void {
-    try {
-      if (!Trackless.canRecord()) return;
-      const normalized = Trackless.normalizeName(name);
-      if (!normalized || !option) return;
-
-      Trackless.session.recordActivity();
-      Trackless.addEvent({ type: "selection", name: normalized, option });
-      Trackless.debug(`selection — ${normalized} option=${option}`);
       Trackless.checkFlushThreshold();
     } catch {
       // Never throws
@@ -486,7 +480,7 @@ export class Trackless {
       }
 
       Trackless.screenViewCooldowns.set(screenName, now);
-      Trackless.screen(screenName);
+      Trackless.view(screenName);
     } catch {
       // Never throws
     }

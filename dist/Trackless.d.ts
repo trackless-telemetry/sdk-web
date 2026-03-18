@@ -13,7 +13,7 @@ export type { EventPayload, EventContext, TracklessEvent, IngestResponse, Enviro
  *   apiKey: 'tl_xxxxxxxxxxxxxxxx',
  * });
  *
- * Trackless.screen('Home');
+ * Trackless.view('home');
  * Trackless.feature('export_clicked');
  * ```
  */
@@ -41,14 +41,12 @@ export declare class Trackless {
     private static screenViewCooldowns;
     /** Configure the SDK and start a new session. */
     static configure(config: TracklessConfig): void;
-    /** Record a screen view. */
-    static screen(name: string): void;
+    /** Record a view event. */
+    static view(name: string, detail?: string): void;
     /** Record a feature usage event. */
-    static feature(name: string): void;
+    static feature(name: string, detail?: string): void;
     /** Record a funnel step. */
     static funnel(funnelName: string, stepIndex: number, stepName: string): void;
-    /** Record a selection event (e.g., theme preference, language choice). */
-    static selection(name: string, option: string): void;
     /** Record a performance measurement. */
     static performance(name: string, duration: number): void;
     /** Record an error event. */

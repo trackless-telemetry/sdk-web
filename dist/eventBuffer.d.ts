@@ -2,7 +2,7 @@ import type { TracklessEvent, EventPayload, EventContext, Environment } from "./
 /**
  * Event buffer with client-side rollup.
  *
- * Count-aggregatable events (feature, screen, error, selection, session duration)
+ * Count-aggregatable events (feature, view, error, session duration)
  * are rolled up by key. Performance events append to durations[].
  * Non-aggregatable events (funnel, session start/end) are appended individually.
  */

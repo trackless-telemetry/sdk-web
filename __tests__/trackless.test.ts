@@ -82,7 +82,7 @@ describe("EventBuffer Aggregation", () => {
   it("different types create separate buffer entries", () => {
     const buffer = new EventBuffer();
     buffer.add({ type: "feature", name: "export" });
-    buffer.add({ type: "screen", name: "export" });
+    buffer.add({ type: "view", name: "export" });
 
     expect(buffer.totalSize).toBe(2);
   });
@@ -401,8 +401,8 @@ describe("No Exceptions", () => {
     expect(() => Trackless.feature("INVALID!@#$")).not.toThrow();
     expect(() => Trackless.feature(null as unknown as string)).not.toThrow();
     expect(() => Trackless.feature(undefined as unknown as string)).not.toThrow();
-    expect(() => Trackless.screen("valid")).not.toThrow();
-    expect(() => Trackless.selection("choice", "a")).not.toThrow();
+    expect(() => Trackless.view("valid")).not.toThrow();
+    expect(() => Trackless.view("product", "shoes")).not.toThrow();
     expect(() => Trackless.performance("metric", 100)).not.toThrow();
     expect(() => Trackless.error("crash")).not.toThrow();
     expect(() => Trackless.funnel("checkout", 0, "step1")).not.toThrow();
@@ -493,7 +493,7 @@ describe("Auto Screen Tracking", () => {
     });
   });
 
-  it("auto screen tracking records route-specific screen event", async () => {
+  it("auto screen tracking records route-specific view event", async () => {
     Object.defineProperty(window, "location", {
       value: { pathname: "/settings" },
       writable: true,
@@ -505,7 +505,7 @@ describe("Auto Screen Tracking", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
-    expect(body.events.some((e: any) => e.name === "settings" && e.type === "screen")).toBe(true);
+    expect(body.events.some((e: any) => e.name === "settings" && e.type === "view")).toBe(true);
   });
 
   it("60-second per-route deduplication prevents rapid fire for same route", async () => {
@@ -528,10 +528,10 @@ describe("Auto Screen Tracking", () => {
     await Trackless.flush();
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
-    const homeScreens = body.events.filter((e: any) => e.name === "home" && e.type === "screen");
+    const homeViews = body.events.filter((e: any) => e.name === "home" && e.type === "view");
     // Should only be 1 entry with count 1 — second was deduplicated
-    expect(homeScreens.length).toBe(1);
-    expect(homeScreens[0].count).toBe(1);
+    expect(homeViews.length).toBe(1);
+    expect(homeViews[0].count).toBe(1);
   });
 
   it("different routes have independent cooldowns", async () => {
@@ -574,7 +574,7 @@ describe("Auto Screen Tracking", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
-    expect(body.events.some((e: any) => e.name === "home" && e.type === "screen")).toBe(true);
+    expect(body.events.some((e: any) => e.name === "home" && e.type === "view")).toBe(true);
   });
 });
 
@@ -651,21 +651,66 @@ describe("Debug Logging", () => {
   });
 });
 
-// ─── 11. Typed Events (6 tests) ─────────────────────────────────────────────
+// ─── 11. Typed Events (7 tests) ─────────────────────────────────────────────
 
 describe("Typed Events", () => {
-  it("screen() records screen type event", async () => {
+  it("view() records view type event", async () => {
     configure();
     await Trackless.flush();
     fetchSpy.mockClear();
 
-    Trackless.screen("dashboard");
+    Trackless.view("dashboard");
     await Trackless.flush();
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
-    const screenEvent = body.events.find((e: any) => e.type === "screen");
-    expect(screenEvent).toBeDefined();
-    expect(screenEvent.name).toBe("dashboard");
+    const viewEvent = body.events.find((e: any) => e.type === "view");
+    expect(viewEvent).toBeDefined();
+    expect(viewEvent.name).toBe("dashboard");
+  });
+
+  it("view() with detail includes detail in event", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.view("product", "shoes");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const viewEvent = body.events.find((e: any) => e.type === "view");
+    expect(viewEvent).toBeDefined();
+    expect(viewEvent.name).toBe("product");
+    expect(viewEvent.detail).toBe("shoes");
+  });
+
+  it("feature() with detail includes detail in event", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("sort_changed", "price_desc");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const featureEvent = body.events.find((e: any) => e.type === "feature");
+    expect(featureEvent).toBeDefined();
+    expect(featureEvent.name).toBe("sort_changed");
+    expect(featureEvent.detail).toBe("price_desc");
+  });
+
+  it("feature() without detail does not include detail field", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("export_clicked");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const featureEvent = body.events.find((e: any) => e.type === "feature");
+    expect(featureEvent).toBeDefined();
+    expect(featureEvent.name).toBe("export_clicked");
+    expect(featureEvent.detail).toBeUndefined();
   });
 
   it("funnel() records funnel type with step and stepIndex", async () => {
@@ -692,19 +737,6 @@ describe("Typed Events", () => {
       step: "payment",
       stepIndex: 1,
     });
-  });
-
-  it("selection() records selection type with option", async () => {
-    configure();
-    await Trackless.flush();
-    fetchSpy.mockClear();
-
-    Trackless.selection("theme", "dark");
-    await Trackless.flush();
-
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
-    const selEvent = body.events.find((e: any) => e.type === "selection");
-    expect(selEvent).toMatchObject({ type: "selection", name: "theme", option: "dark" });
   });
 
   it("performance() records performance type with duration", async () => {
@@ -748,6 +780,86 @@ describe("Typed Events", () => {
       severity: "fatal",
       code: "E001",
     });
+  });
+});
+
+// ─── 11b. Detail Rollup Keys (3 tests) ──────────────────────────────────────
+
+describe("Detail Rollup Keys", () => {
+  it("view events with different details create separate rollup entries", () => {
+    const buffer = new EventBuffer();
+    buffer.add({ type: "view", name: "product" });
+    buffer.add({ type: "view", name: "product", detail: "shoes" });
+    buffer.add({ type: "view", name: "product", detail: "hats" });
+
+    expect(buffer.totalSize).toBe(3);
+  });
+
+  it("feature events with same detail are rolled up together", () => {
+    const buffer = new EventBuffer();
+    buffer.add({ type: "feature", name: "sort_changed", detail: "price_desc" });
+    buffer.add({ type: "feature", name: "sort_changed", detail: "price_desc" });
+
+    expect(buffer.totalSize).toBe(1);
+    const payloads = buffer.drain("production", { platform: "web" });
+    expect(payloads[0].events[0].count).toBe(2);
+    expect(payloads[0].events[0].detail).toBe("price_desc");
+  });
+
+  it("feature events with different details create separate entries", () => {
+    const buffer = new EventBuffer();
+    buffer.add({ type: "feature", name: "sort_changed", detail: "price_desc" });
+    buffer.add({ type: "feature", name: "sort_changed", detail: "name_asc" });
+
+    expect(buffer.totalSize).toBe(2);
+    const payloads = buffer.drain("production", { platform: "web" });
+    const allEvents = payloads.flatMap((p) => p.events);
+    expect(allEvents.find((e) => e.detail === "price_desc")).toBeDefined();
+    expect(allEvents.find((e) => e.detail === "name_asc")).toBeDefined();
+  });
+});
+
+// ─── 11c. Detail Validation (3 tests) ───────────────────────────────────────
+
+describe("Detail Validation", () => {
+  it("view() with empty string detail is silently ignored", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.view("product", "");
+    await Trackless.flush();
+
+    // No event should be recorded (empty detail is invalid)
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("feature() with empty string detail is silently ignored", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("sort_changed", "");
+    await Trackless.flush();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("view() and feature() with undefined detail work normally", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.view("home");
+    Trackless.feature("export_clicked");
+    await Trackless.flush();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(body.events.some((e: any) => e.type === "view" && e.name === "home")).toBe(true);
+    expect(body.events.some((e: any) => e.type === "feature" && e.name === "export_clicked")).toBe(
+      true,
+    );
   });
 });
 

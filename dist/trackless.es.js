@@ -22,15 +22,15 @@ class d {
   drain(e, i) {
     const n = [...this.aggregated.values(), ...this.individual];
     if (this.aggregated.clear(), this.individual = [], n.length === 0) return [];
-    const r = /* @__PURE__ */ new Date(), a = `${r.getFullYear()}-${String(r.getMonth() + 1).padStart(2, "0")}-${String(r.getDate()).padStart(2, "0")}`, c = [];
+    const r = /* @__PURE__ */ new Date(), a = `${r.getFullYear()}-${String(r.getMonth() + 1).padStart(2, "0")}-${String(r.getDate()).padStart(2, "0")}`, u = [];
     for (let o = 0; o < n.length; o += 100)
-      c.push({
+      u.push({
         date: a,
         environment: e,
         context: i,
         events: n.slice(o, o + 100)
       });
-    return c;
+    return u;
   }
   /** Clear the buffer without draining */
   clear() {
@@ -48,12 +48,10 @@ class d {
   rollupKey(e) {
     switch (e.type) {
       case "feature":
-      case "screen":
-        return `${e.type}|${e.name}`;
+      case "view":
+        return `${e.type}|${e.name}|${e.detail ?? ""}`;
       case "error":
         return `${e.type}|${e.name}|${e.severity ?? ""}|${e.code ?? ""}`;
-      case "selection":
-        return `${e.type}|${e.name}|${e.option ?? ""}`;
       case "performance":
         return `${e.type}|${e.name}`;
       case "session":
@@ -87,7 +85,7 @@ class h {
     return this.consecutiveFailures;
   }
 }
-function v(s, e) {
+function w(s, e) {
   return {
     platform: "web",
     osVersion: S(),
@@ -246,7 +244,7 @@ class m {
 }
 const A = 1e4;
 async function F(s, e, i, n = A, r = !1) {
-  const a = new AbortController(), c = setTimeout(() => a.abort(), n);
+  const a = new AbortController(), u = setTimeout(() => a.abort(), n);
   try {
     const o = await fetch(s, {
       method: "POST",
@@ -258,15 +256,15 @@ async function F(s, e, i, n = A, r = !1) {
       signal: a.signal,
       keepalive: r
     });
-    clearTimeout(c);
-    let u;
+    clearTimeout(u);
+    let c;
     try {
-      u = await o.json();
+      c = await o.json();
     } catch {
     }
-    return { status: o.status, body: u };
+    return { status: o.status, body: c };
   } catch (o) {
-    throw clearTimeout(c), o;
+    throw clearTimeout(u), o;
   }
 }
 const g = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, M = 100, y = 6e4, L = 1e4, N = 6e4, C = 100, I = "https://api.tracklesstelemetry.com", t = class t {
@@ -274,7 +272,7 @@ const g = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, M = 100, y = 6e4, L = 1e4, N = 6e4, C
   static configure(e) {
     try {
       t.apiKey = e.apiKey, t.endpoint = e.endpoint ?? I, t.environment = e.environment ?? "production", t.enabled = e.enabled ?? !0, t.onError = e.onError ?? (() => {
-      }), t.flushIntervalMs = e.flushIntervalMs ?? y, t.autoScreenTracking = e.autoScreenTracking ?? !1, t.debugLogging = e.debugLogging ?? !1, t.buffer = new d(), t.circuitBreaker = new h(), t.context = v(e.appVersion, e.buildNumber), t.session = new p(), t.funnels = new m(), t.screenViewCooldowns = /* @__PURE__ */ new Map(), t.destroyed = !1, t.configured = !0, t.debug(
+      }), t.flushIntervalMs = e.flushIntervalMs ?? y, t.autoScreenTracking = e.autoScreenTracking ?? !1, t.debugLogging = e.debugLogging ?? !1, t.buffer = new d(), t.circuitBreaker = new h(), t.context = w(e.appVersion, e.buildNumber), t.session = new p(), t.funnels = new m(), t.screenViewCooldowns = /* @__PURE__ */ new Map(), t.destroyed = !1, t.configured = !0, t.debug(
         `configured — env=${t.environment} endpoint=${t.endpoint} flush=${t.flushIntervalMs}ms`
       ), t.enabled && (t.startNewSession(), t.startPeriodicFlush(), t.addVisibilityListener(), t.autoScreenTracking && t.setupAutoScreenTracking(), t.session.onTimeout = () => {
         t.endCurrentSession(), t.startNewSession();
@@ -283,23 +281,31 @@ const g = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, M = 100, y = 6e4, L = 1e4, N = 6e4, C
       t.enabled = !1;
     }
   }
-  /** Record a screen view. */
-  static screen(e) {
+  /** Record a view event. */
+  static view(e, i) {
     try {
       if (!t.canRecord()) return;
-      const i = t.normalizeName(e);
-      if (!i) return;
-      t.session.recordActivity(), t.addEvent({ type: "screen", name: i }), t.debug(`screen — ${i}`), t.checkFlushThreshold();
+      const n = t.normalizeName(e);
+      if (!n || i !== void 0 && (typeof i != "string" || i === "")) return;
+      t.session.recordActivity(), t.addEvent({
+        type: "view",
+        name: n,
+        ...i ? { detail: i } : {}
+      }), t.debug(`view — ${n}${i ? ` detail=${i}` : ""}`), t.checkFlushThreshold();
     } catch {
     }
   }
   /** Record a feature usage event. */
-  static feature(e) {
+  static feature(e, i) {
     try {
       if (!t.canRecord()) return;
-      const i = t.normalizeName(e);
-      if (!i) return;
-      t.session.recordActivity(), t.addEvent({ type: "feature", name: i }), t.debug(`feature — ${i}`), t.checkFlushThreshold();
+      const n = t.normalizeName(e);
+      if (!n || i !== void 0 && (typeof i != "string" || i === "")) return;
+      t.session.recordActivity(), t.addEvent({
+        type: "feature",
+        name: n,
+        ...i ? { detail: i } : {}
+      }), t.debug(`feature — ${n}${i ? ` detail=${i}` : ""}`), t.checkFlushThreshold();
     } catch {
     }
   }
@@ -319,16 +325,6 @@ const g = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, M = 100, y = 6e4, L = 1e4, N = 6e4, C
         step: a,
         stepIndex: i
       }), t.debug(`funnel — ${r}/${a} step=${i}`), t.checkFlushThreshold();
-    } catch {
-    }
-  }
-  /** Record a selection event (e.g., theme preference, language choice). */
-  static selection(e, i) {
-    try {
-      if (!t.canRecord()) return;
-      const n = t.normalizeName(e);
-      if (!n || !i) return;
-      t.session.recordActivity(), t.addEvent({ type: "selection", name: n, option: i }), t.debug(`selection — ${n} option=${i}`), t.checkFlushThreshold();
     } catch {
     }
   }
@@ -473,7 +469,7 @@ const g = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, M = 100, y = 6e4, L = 1e4, N = 6e4, C
       const n = Date.now(), r = t.screenViewCooldowns.get(i);
       if (r !== void 0 && n - r < N)
         return;
-      t.screenViewCooldowns.set(i, n), t.screen(i);
+      t.screenViewCooldowns.set(i, n), t.view(i);
     } catch {
     }
   }
@@ -485,7 +481,7 @@ const g = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, M = 100, y = 6e4, L = 1e4, N = 6e4, C
 };
 t.apiKey = "", t.endpoint = "", t.environment = "production", t.onError = () => {
 }, t.flushIntervalMs = y, t.autoScreenTracking = !1, t.debugLogging = !1, t.enabled = !1, t.destroyed = !1, t.configured = !1, t.buffer = new d(), t.circuitBreaker = new h(), t.context = { platform: "web" }, t.session = new p(), t.funnels = new m(), t.flushTimer = null, t.visibilityHandler = null, t.popstateHandler = null, t.originalPushState = null, t.screenViewCooldowns = /* @__PURE__ */ new Map();
-let w = t;
+let v = t;
 export {
-  w as Trackless
+  v as Trackless
 };
