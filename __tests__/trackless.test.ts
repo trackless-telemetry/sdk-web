@@ -214,16 +214,15 @@ describe("Flush", () => {
 // ─── 3. Event Name Validation (3 tests) ──────────────────────────────────────
 
 describe("Event Name Validation", () => {
-  it("invalid event names are silently ignored", () => {
-    configure();
-    expect(() => Trackless.feature("invalid name with spaces")).not.toThrow();
-    expect(() => Trackless.feature("INVALID!")).not.toThrow();
-    expect(() => Trackless.feature("a".repeat(101))).not.toThrow();
-  });
-
   it("empty event name is silently ignored", () => {
     configure();
     expect(() => Trackless.feature("")).not.toThrow();
+  });
+
+  it("only-special-chars event name is silently ignored", () => {
+    configure();
+    // All chars are invalid, normalization produces empty string → dropped
+    expect(() => Trackless.feature("!!!")).not.toThrow();
   });
 
   it("uppercase name is normalized to lowercase", async () => {
@@ -238,6 +237,129 @@ describe("Event Name Validation", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
     expect(body.events.some((e: any) => e.name === "exportclicked")).toBe(true);
+  });
+
+  it("spaces and special chars in name are normalized to underscores", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("My Feature!");
+    await Trackless.flush();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(body.events.some((e: any) => e.name === "my_feature")).toBe(true);
+  });
+
+  it("long names are truncated to 100 characters", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("x".repeat(101));
+    await Trackless.flush();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "feature");
+    expect(event.name).toBe("x".repeat(100));
+  });
+
+  it("consecutive dots are collapsed", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("foo..bar");
+    await Trackless.flush();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(body.events.some((e: any) => e.name === "foo.bar")).toBe(true);
+  });
+});
+
+// ─── 3b. Field Normalization (detail, code) ──────────────────────────────────
+
+describe("Field Normalization", () => {
+  it("detail with spaces and uppercase is normalized", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("export", "Product Details Page");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "feature");
+    expect(event.detail).toBe("product_details_page");
+  });
+
+  it("detail that normalizes to empty is omitted", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.view("home", "!!!");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "view");
+    expect(event.detail).toBeUndefined();
+  });
+
+  it("detail with abuse pattern is omitted", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    // 18 hex-only chars triggers the entirely-hex-and-long abuse check
+    Trackless.view("home", "abcdefabcdefabcdef");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "view");
+    expect(event.detail).toBeUndefined();
+  });
+
+  it("error code with spaces is normalized", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.error("crash", "error", "Network Error");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "error");
+    expect(event.code).toBe("network_error");
+  });
+
+  it("error code that normalizes to empty is omitted", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.error("crash", "error", "###");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "error");
+    expect(event.code).toBeUndefined();
+  });
+
+  it("leading/trailing special chars are trimmed from detail", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("export", "...foo...");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "feature");
+    expect(event.detail).toBe("foo");
   });
 });
 
@@ -738,7 +860,8 @@ describe("Debug Logging", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     configure();
-    Trackless.feature("INVALID NAME!");
+    // Name that normalizes to empty → triggers warning
+    Trackless.feature("!!!");
 
     const tracklessWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("[Trackless]"));
     expect(tracklessWarns.length).toBeGreaterThanOrEqual(1);
@@ -750,7 +873,8 @@ describe("Debug Logging", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     configure({ suppressWarnings: true });
-    Trackless.feature("INVALID NAME!");
+    // Name that normalizes to empty → would trigger warning but suppressed
+    Trackless.feature("!!!");
 
     const tracklessWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("[Trackless]"));
     expect(tracklessWarns.length).toBe(0);
@@ -913,7 +1037,7 @@ describe("Typed Events", () => {
       type: "error",
       name: "crash",
       severity: "fatal",
-      code: "E001",
+      code: "e001",
     });
   });
 });
@@ -957,7 +1081,7 @@ describe("Detail Rollup Keys", () => {
 // ─── 11c. Detail Validation (3 tests) ───────────────────────────────────────
 
 describe("Detail Validation", () => {
-  it("view() with empty string detail is silently ignored", async () => {
+  it("view() with empty string detail records event without detail", async () => {
     configure();
     await Trackless.flush();
     fetchSpy.mockClear();
@@ -965,11 +1089,14 @@ describe("Detail Validation", () => {
     Trackless.view("product", "");
     await Trackless.flush();
 
-    // No event should be recorded (empty detail is invalid)
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "view");
+    expect(event.name).toBe("product");
+    expect(event.detail).toBeUndefined();
   });
 
-  it("feature() with empty string detail is silently ignored", async () => {
+  it("feature() with empty string detail records event without detail", async () => {
     configure();
     await Trackless.flush();
     fetchSpy.mockClear();
@@ -977,7 +1104,11 @@ describe("Detail Validation", () => {
     Trackless.feature("sort_changed", "");
     await Trackless.flush();
 
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "feature");
+    expect(event.name).toBe("sort_changed");
+    expect(event.detail).toBeUndefined();
   });
 
   it("view() and feature() with undefined detail work normally", async () => {
@@ -1110,7 +1241,9 @@ describe("PII Stripping", () => {
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
     const event = body.events.find((e: any) => e.type === "feature");
-    expect(event.detail).toBe("submitted by [REDACTED]");
+    // PII stripped then normalized: "submitted by [REDACTED]" → "submitted_by_redacted"
+    expect(event.detail).not.toContain("@");
+    expect(event.detail).toBe("submitted_by_redacted");
   });
 
   it("strips SSN patterns (dashed) from detail fields", async () => {
@@ -1123,7 +1256,9 @@ describe("PII Stripping", () => {
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
     const event = body.events.find((e: any) => e.type === "view");
-    expect(event.detail).toBe("ssn [REDACTED]");
+    // PII stripped then normalized: "ssn [REDACTED]" → "ssn_redacted"
+    expect(event.detail).not.toMatch(/\d{3}-\d{2}-\d{4}/);
+    expect(event.detail).toBe("ssn_redacted");
   });
 
   it("strips SSN patterns (9 consecutive digits) from detail fields", async () => {
@@ -1136,7 +1271,9 @@ describe("PII Stripping", () => {
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
     const event = body.events.find((e: any) => e.type === "feature");
-    expect(event.detail).toBe("id [REDACTED] entered");
+    // PII stripped then normalized: "id [REDACTED] entered" → "id_redacted_entered"
+    expect(event.detail).not.toMatch(/\d{9}/);
+    expect(event.detail).toBe("id_redacted_entered");
   });
 
   it("strips phone numbers from detail fields", async () => {
@@ -1149,7 +1286,9 @@ describe("PII Stripping", () => {
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
     const event = body.events.find((e: any) => e.type === "feature");
-    expect(event.detail).toBe("called [REDACTED]");
+    // PII stripped then normalized: "called [REDACTED]" → "called_redacted"
+    expect(event.detail).not.toMatch(/555/);
+    expect(event.detail).toBe("called_redacted");
   });
 
   it("strips phone numbers without formatting", async () => {
@@ -1162,7 +1301,9 @@ describe("PII Stripping", () => {
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
     const event = body.events.find((e: any) => e.type === "feature");
-    expect(event.detail).toBe("number [REDACTED]");
+    // PII stripped then normalized: "number [REDACTED]" → "number_redacted"
+    expect(event.detail).not.toMatch(/555/);
+    expect(event.detail).toBe("number_redacted");
   });
 
   it("strips PII from error code field", async () => {
@@ -1175,7 +1316,9 @@ describe("PII Stripping", () => {
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
     const event = body.events.find((e: any) => e.type === "error");
-    expect(event.code).toBe("[REDACTED]");
+    // PII stripped then normalized: "[REDACTED]" → "redacted"
+    expect(event.code).not.toContain("@");
+    expect(event.code).toBe("redacted");
   });
 
   it("strips multiple PII patterns from a single string", async () => {
@@ -1188,8 +1331,8 @@ describe("PII Stripping", () => {
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
     const event = body.events.find((e: any) => e.type === "feature");
-    expect(event.detail).not.toContain("a@b.com");
-    expect(event.detail).not.toContain("555-123-4567");
+    expect(event.detail).not.toContain("@");
+    expect(event.detail).not.toContain("555");
   });
 
   it("leaves non-PII strings unchanged", async () => {
@@ -1205,21 +1348,18 @@ describe("PII Stripping", () => {
     expect(event.detail).toBe("dark_mode");
   });
 
-  it("strips email from event names via normalizeName", async () => {
+  it("strips email from event names via normalizeField", async () => {
     configure();
     await Trackless.flush();
     fetchSpy.mockClear();
 
-    // Event names go through normalizeName which now applies stripPII.
-    // Since email contains @ which fails EVENT_NAME_REGEX, the event
-    // will be rejected (name contains [REDACTED] with brackets).
-    // This test verifies that PII stripping happens before validation.
+    // PII stripped then normalized: "user@example.com" → "[REDACTED]" → "redacted"
     Trackless.feature("user@example.com");
     await Trackless.flush();
 
-    // The name "user@example.com" lowercased is "user@example.com",
-    // after stripPII becomes "[redacted]", which fails EVENT_NAME_REGEX
-    // (brackets not allowed), so event is silently dropped
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "feature");
+    expect(event.name).toBe("redacted");
   });
 });

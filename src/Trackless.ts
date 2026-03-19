@@ -146,16 +146,18 @@ export class Trackless {
       if (!Trackless.canRecord()) return;
       const normalized = Trackless.normalizeName(name);
       if (!normalized) return;
-      if (!Trackless.isValidStringField(detail)) return;
 
-      const strippedDetail = detail ? Trackless.stripPII(detail) : undefined;
+      const normalizedDetail =
+        detail !== undefined ? Trackless.normalizeField(detail, EVENT_NAME_MAX_LENGTH) : undefined;
       Trackless.session.recordActivity();
       Trackless.addEvent({
         type: "view",
         name: normalized,
-        ...(strippedDetail ? { detail: strippedDetail } : {}),
+        ...(normalizedDetail ? { detail: normalizedDetail } : {}),
       });
-      Trackless.debug(`view — ${normalized}${detail ? ` detail=${detail}` : ""}`);
+      Trackless.debug(
+        `view — ${normalized}${normalizedDetail ? ` detail=${normalizedDetail}` : ""}`,
+      );
       Trackless.checkFlushThreshold();
     } catch {
       // Never throws
@@ -168,16 +170,18 @@ export class Trackless {
       if (!Trackless.canRecord()) return;
       const normalized = Trackless.normalizeName(name);
       if (!normalized) return;
-      if (!Trackless.isValidStringField(detail)) return;
 
-      const strippedDetail = detail ? Trackless.stripPII(detail) : undefined;
+      const normalizedDetail =
+        detail !== undefined ? Trackless.normalizeField(detail, EVENT_NAME_MAX_LENGTH) : undefined;
       Trackless.session.recordActivity();
       Trackless.addEvent({
         type: "feature",
         name: normalized,
-        ...(strippedDetail ? { detail: strippedDetail } : {}),
+        ...(normalizedDetail ? { detail: normalizedDetail } : {}),
       });
-      Trackless.debug(`feature — ${normalized}${detail ? ` detail=${detail}` : ""}`);
+      Trackless.debug(
+        `feature — ${normalized}${normalizedDetail ? ` detail=${normalizedDetail}` : ""}`,
+      );
       Trackless.checkFlushThreshold();
     } catch {
       // Never throws
@@ -247,17 +251,19 @@ export class Trackless {
       if (!Trackless.canRecord()) return;
       const normalized = Trackless.normalizeName(name);
       if (!normalized) return;
-      if (!Trackless.isValidStringField(code)) return;
 
-      const strippedCode = code ? Trackless.stripPII(code) : undefined;
+      const normalizedCode =
+        code !== undefined ? Trackless.normalizeField(code, EVENT_NAME_MAX_LENGTH) : undefined;
       Trackless.session.recordActivity();
       Trackless.addEvent({
         type: "error",
         name: normalized,
         severity,
-        ...(strippedCode ? { code: strippedCode } : {}),
+        ...(normalizedCode ? { code: normalizedCode } : {}),
       });
-      Trackless.debug(`error — ${normalized} severity=${severity}${code ? ` code=${code}` : ""}`);
+      Trackless.debug(
+        `error — ${normalized} severity=${severity}${normalizedCode ? ` code=${normalizedCode}` : ""}`,
+      );
       Trackless.checkFlushThreshold();
     } catch {
       // Never throws
@@ -323,12 +329,33 @@ export class Trackless {
     return Trackless.enabled && !Trackless.destroyed && Trackless.configured;
   }
 
-  /** Validate an optional string field (detail, code). Returns true if valid or undefined. */
-  private static isValidStringField(value: string | undefined): boolean {
-    if (value === undefined) return true;
-    if (typeof value !== "string" || value === "") return false;
-    if (value.length > EVENT_NAME_MAX_LENGTH) return false;
-    return true;
+  /**
+   * Normalize an event field (name, detail, step, code) into a valid format.
+   * Strips PII, lowercases, replaces invalid chars with underscores, and validates.
+   * Returns null if the result is empty or matches an abuse pattern.
+   */
+  private static normalizeField(value: string, maxLength: number): string | null {
+    if (typeof value !== "string") return null;
+    let result = Trackless.stripPII(value).toLowerCase();
+    // Replace runs of non-allowed chars with a single underscore
+    result = result.replace(/[^a-z0-9._-]+/g, "_");
+    // Trim leading/trailing underscores and dots
+    result = result.replace(/^[_.]+|[_.]+$/g, "");
+    // Collapse consecutive dots
+    result = result.replace(/\.{2,}/g, ".");
+    if (!result) return null;
+    // Truncate to max length
+    if (result.length > maxLength) result = result.slice(0, maxLength);
+    // Reject abuse patterns
+    if (
+      Trackless.UUID_REGEX.test(result) ||
+      Trackless.LONG_HEX_REGEX.test(result) ||
+      Trackless.LONG_NUMERIC_REGEX.test(result) ||
+      Trackless.ALL_HEX_REGEX.test(result)
+    ) {
+      return null;
+    }
+    return result;
   }
 
   private static debug(msg: string): void {
@@ -372,24 +399,9 @@ export class Trackless {
   private static readonly ALL_HEX_REGEX = /^[0-9a-f]{17,}$/;
 
   private static normalizeName(name: string): string | null {
-    if (typeof name !== "string") return null;
-    const normalized = Trackless.stripPII(name.toLowerCase());
-    if (!normalized || normalized.length > EVENT_NAME_MAX_LENGTH) return null;
-    if (!EVENT_NAME_REGEX.test(normalized)) {
-      Trackless.warn(
-        `event name rejected: "${name}" — must match [a-z0-9_.-], no leading/trailing/consecutive dots`,
-      );
-      Trackless.onError(new Error(`Invalid event name: ${name}`));
-      return null;
-    }
-    // Anti-identifier patterns
-    if (
-      Trackless.UUID_REGEX.test(normalized) ||
-      Trackless.LONG_HEX_REGEX.test(normalized) ||
-      Trackless.LONG_NUMERIC_REGEX.test(normalized) ||
-      Trackless.ALL_HEX_REGEX.test(normalized)
-    ) {
-      Trackless.warn(`event name rejected: "${name}" — looks like an identifier`);
+    const normalized = Trackless.normalizeField(name, EVENT_NAME_MAX_LENGTH);
+    if (!normalized) {
+      Trackless.warn(`event name rejected: "${name}"`);
       Trackless.onError(new Error(`Invalid event name: ${name}`));
       return null;
     }
