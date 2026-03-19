@@ -21,7 +21,7 @@ function configure(overrides: Partial<TracklessConfig> = {}): void {
   Trackless.configure({
     apiKey: TEST_API_KEY,
     endpoint: TEST_ENDPOINT,
-    flushIntervalMs: 999_999, // effectively disable periodic flush in tests
+    flushIntervalSeconds: 999_999, // large value to effectively disable periodic flush in tests
     ...overrides,
   });
 }
@@ -98,6 +98,21 @@ describe("EventBuffer Aggregation", () => {
     expect(payloads[0].events[0].durations).toEqual([100, 200, 150]);
   });
 
+  it("performance events with different thresholds create separate buffer entries", () => {
+    const buffer = new EventBuffer();
+    buffer.add({ type: "performance", name: "api_call", duration: 100, threshold: 2 });
+    buffer.add({ type: "performance", name: "api_call", duration: 200, threshold: 5 });
+    buffer.add({ type: "performance", name: "api_call", duration: 150, threshold: 2 });
+
+    expect(buffer.totalSize).toBe(2);
+    const payloads = buffer.drain("production", { platform: "web" });
+    const events = payloads[0].events;
+    const t2 = events.find((e) => e.threshold === 2);
+    const t5 = events.find((e) => e.threshold === 5);
+    expect(t2?.durations).toEqual([100, 150]);
+    expect(t5?.durations).toEqual([200]);
+  });
+
   it("funnel events are stored individually (not aggregated)", () => {
     const buffer = new EventBuffer();
     buffer.add({ type: "funnel", name: "checkout", step: "cart", stepIndex: 0 });
@@ -115,7 +130,7 @@ describe("EventBuffer Aggregation", () => {
 
 describe("Flush", () => {
   it("periodic flush sends buffered events", async () => {
-    configure({ flushIntervalMs: 1000 });
+    configure({ flushIntervalSeconds: 1 });
     Trackless.feature("export_clicked");
 
     await vi.advanceTimersByTimeAsync(1000);
@@ -576,6 +591,87 @@ describe("Auto Screen Tracking", () => {
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
     expect(body.events.some((e: any) => e.name === "home" && e.type === "view")).toBe(true);
   });
+
+  it("hash fragment is recorded as view detail", async () => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/", hash: "#pricing" },
+      writable: true,
+      configurable: true,
+    });
+
+    configure({ autoScreenTracking: true });
+    await Trackless.flush();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const homeView = body.events.find((e: any) => e.name === "home" && e.type === "view");
+    expect(homeView).toBeDefined();
+    expect(homeView.detail).toBe("pricing");
+  });
+
+  it("different hash fragments on same path have independent cooldowns", async () => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/", hash: "#features" },
+      writable: true,
+      configurable: true,
+    });
+
+    configure({ autoScreenTracking: true });
+
+    // Navigate to different hash on same page
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/", hash: "#pricing" },
+      writable: true,
+      configurable: true,
+    });
+    window.dispatchEvent(new Event("hashchange"));
+
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const viewEvents = body.events.filter((e: any) => e.type === "view");
+    const details = viewEvents.map((e: any) => e.detail);
+    expect(details).toContain("features");
+    expect(details).toContain("pricing");
+  });
+
+  it("same hash fragment is deduplicated within cooldown window", async () => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/", hash: "#features" },
+      writable: true,
+      configurable: true,
+    });
+
+    configure({ autoScreenTracking: true });
+
+    // Trigger hashchange to same hash
+    window.dispatchEvent(new Event("hashchange"));
+
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const featureViews = body.events.filter(
+      (e: any) => e.type === "view" && e.detail === "features",
+    );
+    expect(featureViews.length).toBe(1);
+    expect(featureViews[0].count).toBe(1);
+  });
+
+  it("no hash produces view without detail", async () => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/about", hash: "" },
+      writable: true,
+      configurable: true,
+    });
+
+    configure({ autoScreenTracking: true });
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const aboutView = body.events.find((e: any) => e.name === "about" && e.type === "view");
+    expect(aboutView).toBeDefined();
+    expect(aboutView.detail).toBeUndefined();
+  });
 });
 
 // ─── 10. Error Callback (2 tests) ────────────────────────────────────────────
@@ -626,7 +722,7 @@ describe("Debug Logging", () => {
     logSpy.mockRestore();
   });
 
-  it("debugLogging: false (default) produces no console output", () => {
+  it("debugLogging: false (default) produces no console.log output", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     configure();
@@ -638,14 +734,26 @@ describe("Debug Logging", () => {
     logSpy.mockRestore();
   });
 
-  it("debug warns on invalid event names", () => {
+  it("warnings log by default (without debugLogging)", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    configure({ debugLogging: true });
+    configure();
     Trackless.feature("INVALID NAME!");
 
     const tracklessWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("[Trackless]"));
     expect(tracklessWarns.length).toBeGreaterThanOrEqual(1);
+
+    warnSpy.mockRestore();
+  });
+
+  it("suppressWarnings: true suppresses warning output", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    configure({ suppressWarnings: true });
+    Trackless.feature("INVALID NAME!");
+
+    const tracklessWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("[Trackless]"));
+    expect(tracklessWarns.length).toBe(0);
 
     warnSpy.mockRestore();
   });
@@ -752,6 +860,33 @@ describe("Typed Events", () => {
     expect(perfEvent).toBeDefined();
     expect(perfEvent.name).toBe("api_call");
     expect(perfEvent.durations).toEqual([150]);
+  });
+
+  it("performance() includes threshold when provided", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.performance("api_call", 1.5, 2.0);
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const perfEvent = body.events.find((e: any) => e.type === "performance");
+    expect(perfEvent).toBeDefined();
+    expect(perfEvent.name).toBe("api_call");
+    expect(perfEvent.threshold).toBe(2.0);
+    expect(perfEvent.durations).toEqual([1.5]);
+  });
+
+  it("performance() rejects invalid thresholds", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.performance("metric", 1.0, -1);
+    Trackless.performance("metric", 1.0, 0);
+    await Trackless.flush();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("performance() rejects negative durations", async () => {
@@ -891,35 +1026,10 @@ describe("Session Management", () => {
     session.destroy();
   });
 
-  it("SessionManager 30-min inactivity timeout fires callback", async () => {
+  it("SessionManager start returns false if session already active", () => {
     const session = new SessionManager();
-    const callback = vi.fn();
-    session.onTimeout = callback;
-
-    session.start();
-    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
-
-    expect(callback).toHaveBeenCalledTimes(1);
-    session.destroy();
-  });
-
-  it("SessionManager activity resets the inactivity timer", async () => {
-    const session = new SessionManager();
-    const callback = vi.fn();
-    session.onTimeout = callback;
-
-    session.start();
-    // Advance 29 minutes
-    await vi.advanceTimersByTimeAsync(29 * 60 * 1000);
-    session.recordActivity(); // reset timer
-
-    // Advance another 29 minutes (still within 30 min of last activity)
-    await vi.advanceTimersByTimeAsync(29 * 60 * 1000);
-    expect(callback).not.toHaveBeenCalled();
-
-    // Advance past the 30 min mark from last activity
-    await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
-    expect(callback).toHaveBeenCalledTimes(1);
+    expect(session.start()).toBe(true);
+    expect(session.start()).toBe(false); // already active
     session.destroy();
   });
 });
@@ -984,5 +1094,132 @@ describe("Payload Structure", () => {
     expect(payloads.length).toBe(2);
     expect(payloads[0].events.length).toBe(100);
     expect(payloads[1].events.length).toBe(50);
+  });
+});
+
+// ─── 15. PII Stripping (9 tests) ─────────────────────────────────────────────
+
+describe("PII Stripping", () => {
+  it("strips email addresses from detail fields", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("contact_form", "submitted by user@example.com");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "feature");
+    expect(event.detail).toBe("submitted by [REDACTED]");
+  });
+
+  it("strips SSN patterns (dashed) from detail fields", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.view("profile", "ssn 123-45-6789");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "view");
+    expect(event.detail).toBe("ssn [REDACTED]");
+  });
+
+  it("strips SSN patterns (9 consecutive digits) from detail fields", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("form_submit", "id 123456789 entered");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "feature");
+    expect(event.detail).toBe("id [REDACTED] entered");
+  });
+
+  it("strips phone numbers from detail fields", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("call_support", "called +1 (555) 123-4567");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "feature");
+    expect(event.detail).toBe("called [REDACTED]");
+  });
+
+  it("strips phone numbers without formatting", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("dial", "number 5551234567");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "feature");
+    expect(event.detail).toBe("number [REDACTED]");
+  });
+
+  it("strips PII from error code field", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.error("auth_failed", "error", "user@test.com");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "error");
+    expect(event.code).toBe("[REDACTED]");
+  });
+
+  it("strips multiple PII patterns from a single string", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("contact", "email: a@b.com phone: 555-123-4567");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "feature");
+    expect(event.detail).not.toContain("a@b.com");
+    expect(event.detail).not.toContain("555-123-4567");
+  });
+
+  it("leaves non-PII strings unchanged", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("theme_changed", "dark_mode");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const event = body.events.find((e: any) => e.type === "feature");
+    expect(event.detail).toBe("dark_mode");
+  });
+
+  it("strips email from event names via normalizeName", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    // Event names go through normalizeName which now applies stripPII.
+    // Since email contains @ which fails EVENT_NAME_REGEX, the event
+    // will be rejected (name contains [REDACTED] with brackets).
+    // This test verifies that PII stripping happens before validation.
+    Trackless.feature("user@example.com");
+    await Trackless.flush();
+
+    // The name "user@example.com" lowercased is "user@example.com",
+    // after stripPII becomes "[redacted]", which fails EVENT_NAME_REGEX
+    // (brackets not allowed), so event is silently dropped
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

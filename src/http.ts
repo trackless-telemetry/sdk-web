@@ -46,20 +46,3 @@ export async function sendPayload(
     throw error;
   }
 }
-
-/**
- * Send payload via navigator.sendBeacon (for beforeunload/visibility hidden).
- *
- * sendBeacon doesn't support custom headers, so we encode the API key in the payload.
- * Falls back to regular fetch with keepalive if sendBeacon is unavailable.
- */
-export function sendBeacon(endpoint: string, apiKey: string, payload: EventPayload): boolean {
-  if (typeof navigator !== "undefined" && navigator.sendBeacon) {
-    const body = JSON.stringify(payload);
-    const blob = new Blob([body], { type: "application/json" });
-    // Append API key as query parameter for sendBeacon (no custom headers)
-    const url = `${endpoint}?apiKey=${encodeURIComponent(apiKey)}`;
-    return navigator.sendBeacon(url, blob);
-  }
-  return false;
-}

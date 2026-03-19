@@ -21,14 +21,16 @@ export interface TracklessConfig {
   onError?: (error: Error) => void;
   /** Auto-track screen views via pushState/popstate (default: false) */
   autoScreenTracking?: boolean;
-  /** Flush interval in milliseconds (default: 60000) */
-  flushIntervalMs?: number;
+  /** Flush interval in seconds (default: 60) */
+  flushIntervalSeconds?: number;
   /** App version string for context (optional) */
   appVersion?: string;
   /** Build number string for context (optional) */
   buildNumber?: string;
-  /** Enable debug logging to console (default: false) */
+  /** Enable debug logging to console for happy-path events (default: false) */
   debugLogging?: boolean;
+  /** Suppress warning and error logging to console (default: false) */
+  suppressWarnings?: boolean;
 }
 
 /** Result from the HTTP send */
