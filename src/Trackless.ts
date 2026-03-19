@@ -26,7 +26,7 @@ const EVENT_NAME_REGEX = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/;
 const EVENT_NAME_MAX_LENGTH = 100;
 
 /** Default flush interval: 60 seconds */
-const DEFAULT_FLUSH_INTERVAL_MS = 60_000;
+const DEFAULT_FLUSH_INTERVAL_SECONDS = 60;
 
 /** Default flush timeout: 10 seconds */
 const FLUSH_TIMEOUT_MS = 10_000;
@@ -55,14 +55,24 @@ const DEFAULT_ENDPOINT = "https://api.tracklesstelemetry.com";
  * Trackless.feature('export_clicked');
  * ```
  */
+/** Error severity constants for use with `Trackless.error()`. */
+export const Severity = {
+  DEBUG: "debug",
+  INFO: "info",
+  WARNING: "warning",
+  ERROR: "error",
+  FATAL: "fatal",
+} as const satisfies Record<string, ErrorSeverity>;
+
 export class Trackless {
   private static apiKey: string = "";
   private static endpoint: string = "";
   private static environment: Environment = "production";
   private static onError: (error: Error) => void = () => {};
-  private static flushIntervalMs: number = DEFAULT_FLUSH_INTERVAL_MS;
+  private static flushIntervalSeconds: number = DEFAULT_FLUSH_INTERVAL_SECONDS;
   private static autoScreenTracking: boolean = false;
   private static debugLogging: boolean = false;
+  private static suppressWarnings: boolean = false;
 
   private static enabled: boolean = false;
   private static destroyed = false;
@@ -77,10 +87,16 @@ export class Trackless {
   private static flushTimer: ReturnType<typeof setInterval> | null = null;
   private static visibilityHandler: (() => void) | null = null;
   private static popstateHandler: (() => void) | null = null;
+  private static hashchangeHandler: (() => void) | null = null;
   private static originalPushState: typeof history.pushState | null = null;
 
-  /** Per-route screen view deduplication: name -> last recorded timestamp */
+  /** Per-route screen view deduplication: "name" or "name|detail" -> last recorded timestamp */
   private static screenViewCooldowns: Map<string, number> = new Map();
+
+  /** Whether the SDK has been configured and is ready to record events. */
+  static get isConfigured(): boolean {
+    return Trackless.configured && !Trackless.destroyed;
+  }
 
   /** Configure the SDK and start a new session. */
   static configure(config: TracklessConfig): void {
@@ -90,9 +106,11 @@ export class Trackless {
       Trackless.environment = config.environment ?? "production";
       Trackless.enabled = config.enabled ?? true;
       Trackless.onError = config.onError ?? (() => {});
-      Trackless.flushIntervalMs = config.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
+      Trackless.flushIntervalSeconds =
+        config.flushIntervalSeconds ?? DEFAULT_FLUSH_INTERVAL_SECONDS;
       Trackless.autoScreenTracking = config.autoScreenTracking ?? false;
       Trackless.debugLogging = config.debugLogging ?? false;
+      Trackless.suppressWarnings = config.suppressWarnings ?? false;
 
       Trackless.buffer = new EventBuffer();
       Trackless.circuitBreaker = new CircuitBreaker();
@@ -104,7 +122,7 @@ export class Trackless {
       Trackless.configured = true;
 
       Trackless.debug(
-        `configured — env=${Trackless.environment} endpoint=${Trackless.endpoint} flush=${Trackless.flushIntervalMs}ms`,
+        `configured — env=${Trackless.environment} endpoint=${Trackless.endpoint} flush=${Trackless.flushIntervalSeconds}s`,
       );
 
       if (Trackless.enabled) {
@@ -116,12 +134,6 @@ export class Trackless {
         if (Trackless.autoScreenTracking) {
           Trackless.setupAutoScreenTracking();
         }
-
-        // Handle session inactivity timeout
-        Trackless.session.onTimeout = () => {
-          Trackless.endCurrentSession();
-          Trackless.startNewSession();
-        };
       }
     } catch {
       Trackless.enabled = false;
@@ -134,13 +146,14 @@ export class Trackless {
       if (!Trackless.canRecord()) return;
       const normalized = Trackless.normalizeName(name);
       if (!normalized) return;
-      if (detail !== undefined && (typeof detail !== "string" || detail === "")) return;
+      if (!Trackless.isValidStringField(detail)) return;
 
+      const strippedDetail = detail ? Trackless.stripPII(detail) : undefined;
       Trackless.session.recordActivity();
       Trackless.addEvent({
         type: "view",
         name: normalized,
-        ...(detail ? { detail } : {}),
+        ...(strippedDetail ? { detail: strippedDetail } : {}),
       });
       Trackless.debug(`view — ${normalized}${detail ? ` detail=${detail}` : ""}`);
       Trackless.checkFlushThreshold();
@@ -155,13 +168,14 @@ export class Trackless {
       if (!Trackless.canRecord()) return;
       const normalized = Trackless.normalizeName(name);
       if (!normalized) return;
-      if (detail !== undefined && (typeof detail !== "string" || detail === "")) return;
+      if (!Trackless.isValidStringField(detail)) return;
 
+      const strippedDetail = detail ? Trackless.stripPII(detail) : undefined;
       Trackless.session.recordActivity();
       Trackless.addEvent({
         type: "feature",
         name: normalized,
-        ...(detail ? { detail } : {}),
+        ...(strippedDetail ? { detail: strippedDetail } : {}),
       });
       Trackless.debug(`feature — ${normalized}${detail ? ` detail=${detail}` : ""}`);
       Trackless.checkFlushThreshold();
@@ -199,16 +213,28 @@ export class Trackless {
   }
 
   /** Record a performance measurement. */
-  static performance(name: string, duration: number): void {
+  static performance(name: string, durationSeconds: number, thresholdSeconds?: number): void {
     try {
       if (!Trackless.canRecord()) return;
       const normalized = Trackless.normalizeName(name);
       if (!normalized) return;
-      if (typeof duration !== "number" || duration < 0) return;
+      if (typeof durationSeconds !== "number" || durationSeconds < 0) return;
+      if (
+        thresholdSeconds !== undefined &&
+        (typeof thresholdSeconds !== "number" || thresholdSeconds <= 0)
+      )
+        return;
 
       Trackless.session.recordActivity();
-      Trackless.addEvent({ type: "performance", name: normalized, duration });
-      Trackless.debug(`performance — ${normalized} duration=${duration}ms`);
+      Trackless.addEvent({
+        type: "performance",
+        name: normalized,
+        duration: durationSeconds,
+        ...(thresholdSeconds !== undefined ? { threshold: thresholdSeconds } : {}),
+      });
+      Trackless.debug(
+        `performance — ${normalized} duration=${durationSeconds}s${thresholdSeconds !== undefined ? ` threshold=${thresholdSeconds}s` : ""}`,
+      );
       Trackless.checkFlushThreshold();
     } catch {
       // Never throws
@@ -221,13 +247,15 @@ export class Trackless {
       if (!Trackless.canRecord()) return;
       const normalized = Trackless.normalizeName(name);
       if (!normalized) return;
+      if (!Trackless.isValidStringField(code)) return;
 
+      const strippedCode = code ? Trackless.stripPII(code) : undefined;
       Trackless.session.recordActivity();
       Trackless.addEvent({
         type: "error",
         name: normalized,
         severity,
-        ...(code ? { code } : {}),
+        ...(strippedCode ? { code: strippedCode } : {}),
       });
       Trackless.debug(`error — ${normalized} severity=${severity}${code ? ` code=${code}` : ""}`);
       Trackless.checkFlushThreshold();
@@ -246,11 +274,11 @@ export class Trackless {
   }
 
   /** Toggle event recording. Disabling discards buffered data. */
-  static setEnabled(enabled: boolean): void {
+  static setEnabled(isEnabled: boolean): void {
     try {
-      Trackless.debug(`setEnabled — ${enabled}`);
-      Trackless.enabled = enabled;
-      if (!enabled) {
+      Trackless.debug(`setEnabled — ${isEnabled}`);
+      Trackless.enabled = isEnabled;
+      if (!isEnabled) {
         Trackless.buffer.clear();
         Trackless.stopPeriodicFlush();
         Trackless.removeVisibilityListener();
@@ -295,24 +323,73 @@ export class Trackless {
     return Trackless.enabled && !Trackless.destroyed && Trackless.configured;
   }
 
+  /** Validate an optional string field (detail, code). Returns true if valid or undefined. */
+  private static isValidStringField(value: string | undefined): boolean {
+    if (value === undefined) return true;
+    if (typeof value !== "string" || value === "") return false;
+    if (value.length > EVENT_NAME_MAX_LENGTH) return false;
+    return true;
+  }
+
   private static debug(msg: string): void {
     if (Trackless.debugLogging) console.log(`[Trackless] ${msg}`);
   }
 
-  private static debugWarn(msg: string): void {
-    if (Trackless.debugLogging) console.warn(`[Trackless] ${msg}`);
+  private static warn(msg: string): void {
+    if (!Trackless.suppressWarnings) console.warn(`[Trackless] ${msg}`);
   }
 
   private static addEvent(event: TracklessEvent): void {
     Trackless.buffer.add(event);
   }
 
+  /**
+   * Strip PII patterns (emails, SSNs, phone numbers) from a string,
+   * replacing matches with [REDACTED].
+   */
+  private static stripPII(value: string): string {
+    // Email addresses
+    let result = value.replace(
+      /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/gi,
+      "[REDACTED]",
+    );
+    // SSN patterns (check before phone numbers to avoid false matches)
+    result = result.replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[REDACTED]");
+    result = result.replace(/\b\d{9}\b/g, "[REDACTED]");
+    // Phone numbers: a digit, then 8+ mixed digit/separator chars, ending with a digit
+    result = result.replace(/\+?\d[\d\s\-.()]{8,}\d/g, "[REDACTED]");
+    return result;
+  }
+
+  /** Matches UUID format: 8-4-4-4-12 hex with hyphens or underscores */
+  private static readonly UUID_REGEX =
+    /^[0-9a-f]{8}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{12}$/;
+  /** Consecutive hex characters > 24 */
+  private static readonly LONG_HEX_REGEX = /[0-9a-f]{25,}/;
+  /** Numeric-only strings > 12 characters */
+  private static readonly LONG_NUMERIC_REGEX = /^[0-9]{13,}$/;
+  /** Entirely hex characters and longer than 16 characters */
+  private static readonly ALL_HEX_REGEX = /^[0-9a-f]{17,}$/;
+
   private static normalizeName(name: string): string | null {
     if (typeof name !== "string") return null;
-    const normalized = name.toLowerCase();
+    const normalized = Trackless.stripPII(name.toLowerCase());
     if (!normalized || normalized.length > EVENT_NAME_MAX_LENGTH) return null;
     if (!EVENT_NAME_REGEX.test(normalized)) {
-      Trackless.debugWarn(`invalid event name rejected: "${name}"`);
+      Trackless.warn(
+        `event name rejected: "${name}" — must match [a-z0-9_.-], no leading/trailing/consecutive dots`,
+      );
+      Trackless.onError(new Error(`Invalid event name: ${name}`));
+      return null;
+    }
+    // Anti-identifier patterns
+    if (
+      Trackless.UUID_REGEX.test(normalized) ||
+      Trackless.LONG_HEX_REGEX.test(normalized) ||
+      Trackless.LONG_NUMERIC_REGEX.test(normalized) ||
+      Trackless.ALL_HEX_REGEX.test(normalized)
+    ) {
+      Trackless.warn(`event name rejected: "${name}" — looks like an identifier`);
       Trackless.onError(new Error(`Invalid event name: ${name}`));
       return null;
     }
@@ -369,11 +446,11 @@ export class Trackless {
 
         if (result.status >= 500) {
           Trackless.circuitBreaker.recordFailure();
-          Trackless.debugWarn(`flush failed — status=${result.status}`);
+          Trackless.warn(`flush failed — status=${result.status}`);
           Trackless.onError(new Error(`Flush failed with status ${result.status}`));
         } else if (result.status >= 400) {
           // 4xx: discard batch, don't trigger circuit breaker
-          Trackless.debugWarn(`flush rejected — status=${result.status}`);
+          Trackless.warn(`flush rejected — status=${result.status}`);
           Trackless.onError(new Error(`Flush rejected with status ${result.status}`));
         } else {
           Trackless.circuitBreaker.recordSuccess();
@@ -381,7 +458,7 @@ export class Trackless {
         }
       } catch (error) {
         Trackless.circuitBreaker.recordFailure();
-        Trackless.debugWarn("flush failed — network error");
+        Trackless.warn("flush failed — network error");
         Trackless.onError(error instanceof Error ? error : new Error("Flush failed"));
       }
     }
@@ -391,7 +468,7 @@ export class Trackless {
     if (Trackless.flushTimer !== null) return;
     Trackless.flushTimer = setInterval(() => {
       Trackless.performFlush(false).catch(() => {});
-    }, Trackless.flushIntervalMs);
+    }, Trackless.flushIntervalSeconds * 1000);
   }
 
   private static stopPeriodicFlush(): void {
@@ -447,6 +524,14 @@ export class Trackless {
       };
       window.addEventListener("popstate", Trackless.popstateHandler);
     }
+
+    // Listen for hashchange (anchor navigation)
+    if (!Trackless.hashchangeHandler) {
+      Trackless.hashchangeHandler = () => {
+        Trackless.recordScreenView();
+      };
+      window.addEventListener("hashchange", Trackless.hashchangeHandler);
+    }
   }
 
   private static teardownAutoScreenTracking(): void {
@@ -461,6 +546,11 @@ export class Trackless {
       window.removeEventListener("popstate", Trackless.popstateHandler);
       Trackless.popstateHandler = null;
     }
+
+    if (Trackless.hashchangeHandler) {
+      window.removeEventListener("hashchange", Trackless.hashchangeHandler);
+      Trackless.hashchangeHandler = null;
+    }
   }
 
   private static recordScreenView(): void {
@@ -472,15 +562,21 @@ export class Trackless {
 
       if (!EVENT_NAME_REGEX.test(screenName)) return;
 
-      // Per-route deduplication
+      // Extract hash fragment as detail (e.g., "#pricing" → "pricing")
+      const hash =
+        typeof window !== "undefined" ? (window.location.hash ?? "").replace(/^#/, "") : "";
+      const detail = hash || undefined;
+
+      // Per-route deduplication keyed on name+detail
+      const cooldownKey = detail ? `${screenName}|${detail}` : screenName;
       const now = Date.now();
-      const lastRecorded = Trackless.screenViewCooldowns.get(screenName);
+      const lastRecorded = Trackless.screenViewCooldowns.get(cooldownKey);
       if (lastRecorded !== undefined && now - lastRecorded < SCREEN_VIEW_COOLDOWN_MS) {
         return;
       }
 
-      Trackless.screenViewCooldowns.set(screenName, now);
-      Trackless.view(screenName);
+      Trackless.screenViewCooldowns.set(cooldownKey, now);
+      Trackless.view(screenName, detail);
     } catch {
       // Never throws
     }

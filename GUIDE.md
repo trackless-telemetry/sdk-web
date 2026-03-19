@@ -24,18 +24,19 @@ Trackless.configure({
 
 ### Configuration Options
 
-| Option               | Type                        | Default                                | Description                                   |
-| -------------------- | --------------------------- | -------------------------------------- | --------------------------------------------- |
-| `apiKey`             | `string`                    | **required**                           | API key with `tl_` prefix                     |
-| `endpoint`           | `string`                    | `"https://api.tracklesstelemetry.com"` | Ingest endpoint URL                           |
-| `environment`        | `"sandbox" \| "production"` | `"production"`                         | Set to `"sandbox"` for development/staging    |
-| `enabled`            | `boolean`                   | `true`                                 | Set `false` to disable all recording          |
-| `appVersion`         | `string`                    | `undefined`                            | Your app's version (e.g., `"2.1.0"`)          |
-| `buildNumber`        | `string`                    | `undefined`                            | Your app's build number (e.g., `"142"`)       |
-| `autoScreenTracking` | `boolean`                   | `false`                                | Auto-track SPA route changes as screen events |
-| `onError`            | `(error: Error) => void`    | no-op                                  | Error callback for debugging                  |
-| `flushIntervalMs`    | `number`                    | `60000`                                | Flush interval in milliseconds                |
-| `debugLogging`       | `boolean`                   | `false`                                | Enable debug logging to console               |
+| Option                 | Type                        | Default                                | Description                                                     |
+| ---------------------- | --------------------------- | -------------------------------------- | --------------------------------------------------------------- |
+| `apiKey`               | `string`                    | **required**                           | API key with `tl_` prefix                                       |
+| `endpoint`             | `string`                    | `"https://api.tracklesstelemetry.com"` | Ingest endpoint URL                                             |
+| `environment`          | `"sandbox" \| "production"` | `"production"`                         | Set to `"sandbox"` for development/staging                      |
+| `enabled`              | `boolean`                   | `true`                                 | Set `false` to disable all recording                            |
+| `appVersion`           | `string`                    | `undefined`                            | Your app's version (e.g., `"2.1.0"`)                            |
+| `buildNumber`          | `string`                    | `undefined`                            | Your app's build number (e.g., `"142"`)                         |
+| `autoScreenTracking`   | `boolean`                   | `false`                                | Auto-track SPA route changes and hash navigation as view events |
+| `onError`              | `(error: Error) => void`    | no-op                                  | Error callback for debugging                                    |
+| `flushIntervalSeconds` | `number`                    | `60`                                   | Flush interval in seconds                                       |
+| `debugLogging`         | `boolean`                   | `false`                                | Enable debug logging for happy-path events                      |
+| `suppressWarnings`     | `boolean`                   | `false`                                | Suppress warning and error logging to console                   |
 
 ### Where to Put It
 
@@ -125,17 +126,36 @@ export default function RootLayout({ children }) {
 
 All methods are static. Call them anywhere after `configure()`.
 
-### Screen Views
+### Views
 
 Record when a user views a screen or page. Use `autoScreenTracking: true` for SPA route changes, or call manually:
 
 ```typescript
-Trackless.screen("home");
-Trackless.screen("settings");
-Trackless.screen("profile.edit");
+Trackless.view("home");
+Trackless.view("settings");
+Trackless.view("profile.edit");
 ```
 
 **When to use:** Page/route loads, tab switches, modal views that represent distinct screens.
+
+#### The `detail` Parameter
+
+Use the optional `detail` parameter to distinguish sub-views or sections within a page:
+
+```typescript
+// Landing page sections (anchor navigation)
+Trackless.view("home", "features");
+Trackless.view("home", "pricing");
+
+// Tab views within a page
+Trackless.view("settings", "general");
+Trackless.view("settings", "notifications");
+
+// Modal or overlay views
+Trackless.view("dashboard", "filter-panel");
+```
+
+Each `name + detail` combination is aggregated separately, so you can see which sections get the most attention. When `autoScreenTracking` is enabled, hash fragments are automatically captured as the detail — navigating to `yoursite.com/#pricing` records `view("home", "pricing")`.
 
 **With React Router:**
 
@@ -144,12 +164,12 @@ import { useLocation } from "react-router-dom";
 import { Trackless } from "@trackless-telemetry/sdk-web";
 import { useEffect } from "react";
 
-function useScreenTracking() {
+function useViewTracking() {
   const location = useLocation();
   useEffect(() => {
     // Convert "/settings/profile" → "settings.profile"
     const name = location.pathname.slice(1).replace(/\//g, ".") || "home";
-    Trackless.screen(name);
+    Trackless.view(name);
   }, [location.pathname]);
 }
 ```
@@ -160,19 +180,24 @@ function useScreenTracking() {
 import { Trackless } from "@trackless-telemetry/sdk-web";
 router.afterEach((to) => {
   const name = ((to.name as string) ?? to.path.slice(1).replace(/\//g, ".")) || "home";
-  Trackless.screen(name);
+  Trackless.view(name);
 });
 ```
 
 ### Feature Usage
 
-Record when a user interacts with a feature:
+Record when a user interacts with a feature. Use the optional `detail` parameter to distinguish variants:
 
 ```typescript
 Trackless.feature("export_clicked");
 Trackless.feature("dark_mode_toggled");
 Trackless.feature("photo-upload");
-Trackless.feature("settings.notifications");
+Trackless.feature("settings", "notifications");
+
+// With detail to compare variants
+Trackless.feature("share", "twitter");
+Trackless.feature("share", "email");
+Trackless.feature("sort", "price_low_to_high");
 ```
 
 **When to use:** Button clicks, toggles, actions — any user-initiated feature interaction.
@@ -204,23 +229,9 @@ Trackless.funnel("onboarding", 3, "setup_profile");
 - Steps are deduplicated per session — calling the same step index twice is a no-op
 - Funnel state resets on session end
 
-### Selections
-
-Track choices from a set of options:
-
-```typescript
-Trackless.selection("theme", "dark");
-Trackless.selection("theme", "light");
-Trackless.selection("sort_order", "price_low_to_high");
-Trackless.selection("plan", "pro_monthly");
-Trackless.selection("language", "es");
-```
-
-**When to use:** Dropdown selections, radio button choices, toggle groups, filter options, plan selection — any place users pick from a defined set.
-
 ### Performance Metrics
 
-Record timing measurements in seconds:
+Record timing measurements in **seconds**, with an optional **threshold** for breach tracking:
 
 ```typescript
 // API response time
@@ -233,79 +244,84 @@ Trackless.performance("page_load", 1.23);
 
 // Image processing time
 Trackless.performance("image_resize", 0.45);
+
+// With threshold — track how many measurements exceed 2 seconds
+Trackless.performance("api_fetch_data", (performance.now() - start) / 1000, 2.0);
+
+// Named parameters for clarity
+Trackless.performance("api_fetch_data", durationSeconds, thresholdSeconds);
 ```
 
-**When to use:** API latency, page load times, rendering durations, file processing times — any timing you want percentile distributions for (p50, p75, p90, p95, p99).
+**When to use:** API latency, page load times, rendering durations, file processing times — any timing you want percentile distributions for (p50, p90, p99).
 
-**Important:** Duration is in **seconds** (not milliseconds). Divide `performance.now()` results by 1000.
+**Threshold:** The optional third parameter defines a performance threshold in seconds. Each name/threshold combination is tracked separately, with breach counts (measurements exceeding the threshold) shown in the dashboard.
+
+**Important:** Duration is in **seconds** (not milliseconds). Divide `performance.now()` results by 1000. Typical values: 0.05–5.0 for API calls, 0.5–10.0 for page loads. Values &le; 0 are dropped. Threshold must be > 0.
 
 ### Errors
 
-Record application errors with severity and optional code:
+Record application errors with severity and optional code. Use the exported `Severity` constants for type-safe severity values:
 
 ```typescript
+import { Trackless, Severity } from "@trackless-telemetry/sdk-web";
+
 // Basic error
-Trackless.error("payment_failed", "error");
+Trackless.error("payment_failed", Severity.ERROR);
 
 // With error code
-Trackless.error("api_timeout", "warning", "ETIMEDOUT");
-Trackless.error("validation_failed", "info", "INVALID_EMAIL");
+Trackless.error("api_timeout", Severity.WARNING, "ETIMEDOUT");
+Trackless.error("validation_failed", Severity.INFO, "INVALID_EMAIL");
 
 // In a catch block
 try {
   await submitOrder();
 } catch (e) {
-  Trackless.error("order_submission", "error", e instanceof Error ? e.name : "unknown");
+  Trackless.error("order_submission", Severity.ERROR, e instanceof Error ? e.name : "unknown");
 }
 ```
 
-**Severity levels:** `"debug"` | `"info"` | `"warning"` | `"error"` | `"fatal"`
+**Severity levels:** `Severity.DEBUG`, `Severity.INFO`, `Severity.WARNING`, `Severity.ERROR`, `Severity.FATAL` (or string literals `"debug"` | `"info"` | `"warning"` | `"error"` | `"fatal"`)
 
 **When to use:** Caught exceptions, failed API calls, validation errors, any error condition you want to trend.
 
 ## 4. Event Naming Rules
 
-All event names (screen, feature, funnel, selection, performance, error) follow the same rules:
+All event names (view, feature, funnel, performance, error) follow the same rules:
 
-| Rule               | Detail                                                                                  |
-| ------------------ | --------------------------------------------------------------------------------------- |
-| **Auto-lowercase** | Names are automatically lowercased — `Export_Clicked` becomes `export_clicked`          |
-| **Characters**     | Lowercase `a-z`, digits `0-9`, underscores `_`, hyphens `-`, dots `.`                   |
-| **Length**         | 1–100 characters                                                                        |
-| **Dots**           | Dots allowed for hierarchical grouping (e.g., `settings.theme`, `nav.settings.display`) |
-| **No identifiers** | UUIDs, long hex strings, and numeric-only strings >12 chars are rejected                |
+| Rule               | Detail                                                                         |
+| ------------------ | ------------------------------------------------------------------------------ |
+| **Auto-lowercase** | Names are automatically lowercased — `Export_Clicked` becomes `export_clicked` |
+| **Characters**     | Lowercase `a-z`, digits `0-9`, underscores `_`, hyphens `-`, dots `.`          |
+| **Length**         | 1–100 characters (also applies to `detail` and `code` fields)                  |
+| **No identifiers** | UUIDs, long hex strings, and numeric-only strings >12 chars are rejected       |
 
-**Valid:** `checkout_started`, `settings.dark_mode`, `photo-upload`, `nav.settings.display`
+**Valid:** `checkout_started`, `dark_mode`, `photo-upload`, `settings.theme`
 **Also valid (auto-lowercased):** `Export_Clicked` → `export_clicked`, `Settings.Theme` → `settings.theme`
 **Invalid:** `user 123` (space), `.leading-dot` (leading dot), `export!clicked` (special characters)
 
-### Hierarchical Grouping with Dots
+### Feature Grouping with Detail
 
-Use `.` delimiters to create hierarchical event names. The dashboard groups **feature** events by the first dot segment and shows donut charts with the distribution of values within each group.
+Use the optional `detail` parameter to distinguish variants within a feature. The dashboard groups features that have detail values and shows donut charts with the distribution.
 
 ```typescript
 // These create a "theme" group in the dashboard with "dark" and "light" values
-Trackless.feature("theme.dark");
-Trackless.feature("theme.light");
+Trackless.feature("theme", "dark");
+Trackless.feature("theme", "light");
 
-// Deeper hierarchies work too — grouped by first segment ("settings")
-Trackless.feature("settings.display.theme");
-Trackless.feature("settings.display.layout");
-Trackless.feature("settings.notifications");
+// Use detail for any choice-from-a-set scenario
+Trackless.feature("distance_preset", "1_mile");
+Trackless.feature("distance_preset", "2_miles");
+Trackless.feature("settings", "notifications");
 ```
 
-**Which types support grouping?** Dots are allowed in names for all event types, but the dashboard's automatic group visualization (donut charts) currently applies to **`feature`** events only. For other use cases, consider the typed alternatives:
-
-- Instead of `feature("theme.dark")` / `feature("theme.light")` → use `selection("theme", "dark")` for choice-from-a-set scenarios
-- Use `feature` with dots when you want the dashboard group charts, or when the variants aren't mutually exclusive choices
+**Which types support grouping?** The `detail` parameter is supported on `feature` and `view` events. The dashboard's automatic group visualization (donut charts) applies to both.
 
 ## 5. Session Lifecycle
 
 Sessions are managed automatically. No code needed.
 
-- **Start:** A session begins when `Trackless.configure()` is called
-- **End:** A session ends when the page is hidden (`visibilitychange`) or on `beforeunload`
-- **Timeout:** If the page is hidden for 30+ minutes and becomes visible again, the previous session is ended and a new session starts
+- **Start:** A session begins when `Trackless.configure()` is called, and a new session starts each time the page becomes visible again
+- **End:** A session ends when the page is hidden (`visibilitychange`) — the session-end event (with duration and depth) is flushed immediately
 - **Depth:** Every non-session event increments the session's depth counter (used for session depth analytics)
 - **Duration:** Measured from session start to session end (used for session duration analytics)
 
@@ -315,11 +331,19 @@ Events are buffered in memory and sent in batches:
 
 - **Periodic flush:** Every 60 seconds (configurable) if the buffer is non-empty
 - **Item threshold:** When the buffer reaches 100 unique items
-- **Session end:** Flushed on page hide / beforeunload using `navigator.sendBeacon()`
+- **Session end:** Flushed on page hide / beforeunload using `fetch()` with `keepalive: true`
 - **Manual:** Call `Trackless.flush()` at any time
 - **Client-side rollup:** Duplicate events are pre-aggregated in the buffer (e.g., 50 `feature("save")` calls become one event with `count: 50`), so 100 buffer items can represent thousands of raw calls
 
-## 7. Cleanup
+## 7. State & Cleanup
+
+Check whether the SDK is configured before recording in shared code:
+
+```typescript
+if (Trackless.isConfigured) {
+  Trackless.feature("shared_action");
+}
+```
 
 Call `destroy()` when your app unmounts (e.g., in a React `useEffect` cleanup or Vue `onUnmounted`):
 
@@ -327,7 +351,7 @@ Call `destroy()` when your app unmounts (e.g., in a React `useEffect` cleanup or
 Trackless.destroy();
 ```
 
-This flushes remaining events and removes all listeners. After `destroy()`, the instance is permanently disabled. Call `Trackless.configure()` again to re-initialize.
+This flushes remaining events and removes all listeners. After `destroy()`, the instance is permanently disabled (`isConfigured` returns `false`). Call `Trackless.configure()` again to re-initialize.
 
 ## 8. Complete Integration Example
 
@@ -357,7 +381,7 @@ initAnalytics();
 
 ```tsx
 // src/pages/Checkout.tsx
-import { Trackless } from "@trackless-telemetry/sdk-web";
+import { Trackless, Severity } from "@trackless-telemetry/sdk-web";
 
 export function Checkout() {
   const handleAddToCart = () => {
@@ -365,7 +389,7 @@ export function Checkout() {
   };
 
   const handleSelectShipping = (method: string) => {
-    Trackless.selection("shipping_method", method);
+    Trackless.feature("shipping_method", method);
     Trackless.funnel("checkout", 1, "select_shipping");
   };
 
@@ -377,7 +401,7 @@ export function Checkout() {
       Trackless.performance("order_submission", (performance.now() - start) / 1000);
       Trackless.funnel("checkout", 3, "order_complete");
     } catch (e) {
-      Trackless.error("order_failed", "error", e instanceof Error ? e.name : "unknown");
+      Trackless.error("order_failed", Severity.ERROR, e instanceof Error ? e.name : "unknown");
     }
   };
 
@@ -387,11 +411,11 @@ export function Checkout() {
 
 ```tsx
 // src/pages/Settings.tsx
-import { Trackless } from "@trackless-telemetry/sdk-web";
+import { Trackless, Severity } from "@trackless-telemetry/sdk-web";
 
 export function Settings() {
   const handleThemeChange = (theme: string) => {
-    Trackless.selection("theme", theme);
+    Trackless.feature("theme", theme);
   };
 
   const handleExport = async () => {
@@ -401,7 +425,7 @@ export function Settings() {
       await exportData();
       Trackless.performance("data_export", (performance.now() - start) / 1000);
     } catch (e) {
-      Trackless.error("export_failed", "error");
+      Trackless.error("export_failed", Severity.ERROR);
     }
   };
 
@@ -418,7 +442,7 @@ Trackless collects **no user identifiers** and stores **only aggregate counts**.
 - **No IP address processing** — region comes from `navigator.language`, not IP geolocation
 - **No cross-session linking** — all session state is in-memory only
 - **No data sent to third parties** — events go only to your configured endpoint
-- **PII auto-redaction** on custom event properties
+- **PII auto-stripping** — email addresses, phone numbers, and SSN patterns are automatically stripped from all event fields before buffering
 
 The only context collected is: platform (`"web"`), OS version (major.minor from user agent), device class (phone/tablet/desktop from screen width heuristic), and locale (from `navigator.language`). All are coarse, non-identifying dimensions.
 

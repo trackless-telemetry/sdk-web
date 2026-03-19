@@ -140,7 +140,7 @@ export class EventBuffer {
       case "error":
         return `${event.type}|${event.name}|${event.severity ?? ""}|${event.code ?? ""}`;
       case "performance":
-        return `${event.type}|${event.name}`;
+        return `${event.type}|${event.name}|${event.threshold !== undefined ? String(event.threshold) : ""}`;
       case "session":
         // session duration events are aggregatable by name
         return `${event.type}|${event.name}`;
