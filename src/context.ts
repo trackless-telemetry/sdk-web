@@ -26,6 +26,15 @@ export function detectContext(appVersion?: string, buildNumber?: string): EventC
 /** Extract major OS version only */
 function detectOsVersion(): string | undefined {
   try {
+    // Prefer userAgentData.platformVersion when available (Chromium browsers).
+    // This returns the real OS version, unlike the UA string which Apple froze
+    // at "Mac OS X 10_15_7" for macOS and "Windows NT 10.0" for Windows 11.
+    const uaData = (navigator as any).userAgentData;
+    if (uaData?.platformVersion) {
+      const major = uaData.platformVersion.split(".")[0];
+      if (major) return major;
+    }
+
     const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
     if (!ua) return undefined;
 
@@ -35,17 +44,16 @@ function detectOsVersion(): string | undefined {
     const windowsMatch = ua.match(/Windows NT (\d+\.\d+)/);
     if (windowsMatch) version = windowsMatch[1];
 
-    // macOS: "Mac OS X 10_15_7" → "10", "Mac OS X 14_0" → "14"
-    if (!version) {
-      const macMatch = ua.match(/Mac OS X (\d+)[_.](\d+)/);
-      if (macMatch) version = `${macMatch[1]}.${macMatch[2]}`;
-    }
-
-    // iOS: "CPU iPhone OS 17_0" or "CPU OS 17_0" → "17"
+    // iOS must be checked before macOS — iPhone/iPad UA strings contain
+    // "like Mac OS X" but the real version is in "CPU iPhone OS 18_0"
     if (!version) {
       const iosMatch = ua.match(/(?:iPhone|CPU) OS (\d+)[_.](\d+)/);
       if (iosMatch) version = `${iosMatch[1]}.${iosMatch[2]}`;
     }
+
+    // macOS: skip UA-based version — Apple froze it at "Mac OS X 10_15_7" in
+    // Safari regardless of actual macOS version. Returning "10" is misleading.
+    // The real version is only available via userAgentData (Chromium) above.
 
     // Android: "Android 14.0" or "Android 14" → "14"
     if (!version) {
@@ -152,11 +160,13 @@ function detectOs(): "macos" | "windows" | "linux" | "android" | "ios" | "other"
       return "other";
     }
     // UA fallback for Safari
+    // iPhone/iPad/iPod must be checked before Mac OS X because iOS UA strings
+    // contain "like Mac OS X" (e.g., "CPU iPhone OS 18_0 like Mac OS X")
     const ua = navigator.userAgent;
+    if (/iPhone|iPad|iPod/.test(ua)) return "ios";
     if (/Mac OS X/.test(ua)) return "macos";
     if (/Windows/.test(ua)) return "windows";
     if (/Android/.test(ua)) return "android";
-    if (/iPhone|iPad|iPod/.test(ua)) return "ios";
     if (/Linux|CrOS/.test(ua)) return "linux";
     return "other";
   } catch {
