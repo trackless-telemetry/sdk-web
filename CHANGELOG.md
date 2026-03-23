@@ -5,6 +5,13 @@ All notable changes to the Trackless Telemetry Web SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-03-23
+
+### Fixed
+
+- **iOS misidentified as macOS** — Safari on iPhone/iPad was reported as `os: "macos"` because the UA string contains "like Mac OS X" and the macOS check ran first. iOS devices are now correctly detected as `os: "ios"`.
+- **Frozen macOS version number** — Apple froze the macOS version in Safari's UA string at `10_15_7`, so all macOS Safari users reported `osVersion: "10"`. The SDK now uses `navigator.userAgentData.platformVersion` for accurate versions on Chromium browsers and omits the misleading frozen version for Safari (reported as unknown).
+
 ## [0.2.1] - 2026-03-19
 
 ### Changed
