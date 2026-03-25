@@ -5,6 +5,18 @@ All notable changes to the Trackless Telemetry Web SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-03-24
+
+### Added
+
+- **Bot detection** — Automation-driven browsers (Selenium, Puppeteer, Playwright) are now reported as `browser: "bot"` via the W3C `navigator.webdriver` flag. This lets dashboard users see if traffic is coming from bots without violating any privacy invariants.
+- Include SDK version (`web/0.2.3`) in event context for server-side diagnostics
+- Add `language` to event context — ISO 639-1 code detected from `navigator.language`
+
+### Changed
+
+- **Privacy guarantees clarified** — explicitly documents that error tracking collects no stack traces, crash logs, or error messages, and that performance tracking stores no individual duration measurements (server-side t-digest aggregation only).
+
 ## [0.2.2] - 2026-03-23
 
 ### Fixed

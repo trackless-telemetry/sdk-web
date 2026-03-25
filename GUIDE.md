@@ -445,9 +445,11 @@ Trackless collects **no user identifiers** and stores **only aggregate counts**.
 - **No IP address processing** — region comes from `navigator.language`, not IP geolocation
 - **No cross-session linking** — all session state is in-memory only
 - **No data sent to third parties** — events go only to your configured endpoint
+- **No stack traces, crash logs, or error messages** — error tracking uses only developer-defined names, severity levels, and codes
+- **No individual performance measurements stored** — durations are aggregated server-side into statistical digests (t-digest)
 - **PII auto-stripping** — email addresses, phone numbers, and SSN patterns are automatically stripped from all event fields before buffering
 
-The only context collected is: platform (`"web"`), OS version (major.minor from user agent), device class (phone/tablet/desktop from screen width heuristic), and locale (from `navigator.language`). All are coarse, non-identifying dimensions.
+The only context collected is: platform (`"web"`), OS version (major.minor from user agent), device class (phone/tablet/desktop from screen width heuristic), locale (from `navigator.language`), language (ISO 639-1 code from `navigator.language`, e.g., `"en"`), and `sdkVersion` (e.g., `web/0.2.3`). All are coarse, non-identifying dimensions.
 
 ## 10. Environment Variables
 

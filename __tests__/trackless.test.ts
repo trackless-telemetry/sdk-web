@@ -1363,3 +1363,16 @@ describe("PII Stripping", () => {
     expect(event.name).toBe("redacted");
   });
 });
+
+// ─── 16. SDK Version (1 test) ─────────────────────────────────────────────────
+
+describe("SDK Version", () => {
+  it("context includes sdkVersion matching web/X.Y.Z pattern", async () => {
+    configure();
+    Trackless.feature("test_feature");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(body.context.sdkVersion).toMatch(/^web\/\d+\.\d+\.\d+$/);
+  });
+});

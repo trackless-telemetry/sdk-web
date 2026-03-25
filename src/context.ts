@@ -1,4 +1,5 @@
 import type { EventContext } from "./types.js";
+import pkg from "../package.json" with { type: "json" };
 
 /**
  * Detect coarse device context from browser APIs.
@@ -15,10 +16,12 @@ export function detectContext(appVersion?: string, buildNumber?: string): EventC
     osVersion: detectOsVersion(),
     deviceClass: detectDeviceClass(),
     region: detectRegion(),
+    language: detectLanguage(),
     browser: detectBrowser(),
     os: detectOs(),
     appVersion,
     buildNumber,
+    sdkVersion: `web/${pkg.version}`,
     // daysSinceInstall omitted — web has no install concept
   };
 }
@@ -123,11 +126,37 @@ function detectRegion(): string | undefined {
 }
 
 /**
+ * Extract language code from navigator.languages[0] or navigator.language.
+ *
+ * Returns the ISO 639-1 language code only (e.g., "en", "fr", "de").
+ * Derived from browser locale settings — no network calls.
+ */
+function detectLanguage(): string | undefined {
+  try {
+    const lang = navigator.languages?.[0] ?? navigator.language;
+    if (lang) {
+      const code = lang.split("-")[0].toLowerCase();
+      if (code) return code;
+    }
+    const resolved = new Intl.DateTimeFormat().resolvedOptions().locale;
+    const code = resolved.split("-")[0].toLowerCase();
+    return code || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Detect browser from navigator.userAgentData (Chrome, Edge, Firefox)
  * with Safari fallback via navigator.vendor.
  */
-function detectBrowser(): "chrome" | "safari" | "firefox" | "edge" | "other" {
+function detectBrowser(): "chrome" | "safari" | "firefox" | "edge" | "bot" | "other" {
   try {
+    // Detect automation-driven browsers via the standard W3C WebDriver flag.
+    // This surfaces obvious bot traffic (Selenium, Puppeteer, Playwright) without
+    // parsing the full user agent string (Privacy Invariant 2).
+    if (typeof navigator !== "undefined" && (navigator as any).webdriver) return "bot";
+
     const uaData = (navigator as any).userAgentData;
     if (uaData?.brands) {
       const brands = uaData.brands.map((b: { brand: string }) => b.brand.toLowerCase());
