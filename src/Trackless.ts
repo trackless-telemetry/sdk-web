@@ -398,6 +398,14 @@ export class Trackless {
   /** Entirely hex characters and longer than 16 characters */
   private static readonly ALL_HEX_REGEX = /^[0-9a-f]{17,}$/;
 
+  /** UUID in a URL path segment (8-4-4-4-12 hex with hyphens) */
+  private static readonly EMBEDDED_UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  /** 6+ digit numeric ID in a URL path segment */
+  private static readonly LONG_NUMERIC_RE = /^\d{6,}$/;
+  /** 12+ hex chars in a URL path segment (MongoDB ObjectIDs, short hashes) */
+  private static readonly LONG_HEX_RE = /^[0-9a-f]{12,}$/i;
+
   private static normalizeName(name: string): string | null {
     const normalized = Trackless.normalizeField(name, EVENT_NAME_MAX_LENGTH);
     if (!normalized) {
@@ -594,15 +602,28 @@ export class Trackless {
     }
   }
 
+  /** Replace dynamic URL segments (UUIDs, long numeric IDs, long hex strings) with `-id-` */
+  private static stripDynamicSegments(segments: string[]): string[] {
+    return segments.map((seg) => {
+      if (Trackless.EMBEDDED_UUID_RE.test(seg)) return "-id-";
+      if (Trackless.LONG_NUMERIC_RE.test(seg)) return "-id-";
+      if (Trackless.LONG_HEX_RE.test(seg)) return "-id-";
+      return seg;
+    });
+  }
+
   /** Convert a URL path to a screen name */
   private static pathToScreenName(path: string): string {
-    let clean = path.replace(/^\//, "");
-    if (!clean) return "home";
+    const stripped = path.replace(/^\//, "");
+    if (!stripped) return "home";
 
-    clean = clean.replace(/\//g, "_");
-    clean = clean.replace(/_+/g, "_");
-    clean = clean.replace(/_$/, "");
+    const segments = stripped.split("/").filter(Boolean);
+    const cleaned = Trackless.stripDynamicSegments(segments);
 
-    return clean;
+    let result = cleaned.join("_");
+    result = result.replace(/_+/g, "_");
+    result = result.replace(/_$/, "");
+
+    return result || "home";
   }
 }

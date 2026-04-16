@@ -22,6 +22,7 @@ export function detectContext(appVersion?: string, buildNumber?: string): EventC
     appVersion,
     buildNumber,
     sdkVersion: `web/${pkg.version}`,
+    distributionChannel: typeof window !== "undefined" ? window.location.hostname : undefined,
     // daysSinceInstall omitted — web has no install concept
   };
 }

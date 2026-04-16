@@ -796,6 +796,126 @@ describe("Auto Screen Tracking", () => {
   });
 });
 
+// ─── 9b. Auto Screen Tracking — Dynamic Segment Stripping (7 tests) ────────
+
+describe("Auto Screen Tracking — Dynamic Segment Stripping", () => {
+  beforeEach(() => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/" },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  it("UUID in path is replaced with -id-", async () => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/apps/e2ebbbc5-f5e9-42eb-8913-4ef078b9b4a6/sessions" },
+      writable: true,
+      configurable: true,
+    });
+
+    configure({ autoScreenTracking: true });
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(body.events.some((e: any) => e.name === "apps_-id-_sessions" && e.type === "view")).toBe(
+      true,
+    );
+  });
+
+  it("long numeric ID is replaced with -id-", async () => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/users/12345678/profile" },
+      writable: true,
+      configurable: true,
+    });
+
+    configure({ autoScreenTracking: true });
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(body.events.some((e: any) => e.name === "users_-id-_profile" && e.type === "view")).toBe(
+      true,
+    );
+  });
+
+  it("long hex string (MongoDB ObjectID) is replaced with -id-", async () => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/orders/5f3d8a2b1c4e7890abcd1234/details" },
+      writable: true,
+      configurable: true,
+    });
+
+    configure({ autoScreenTracking: true });
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(
+      body.events.some((e: any) => e.name === "orders_-id-_details" && e.type === "view"),
+    ).toBe(true);
+  });
+
+  it("short numbers are preserved", async () => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/products/42/reviews" },
+      writable: true,
+      configurable: true,
+    });
+
+    configure({ autoScreenTracking: true });
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(
+      body.events.some((e: any) => e.name === "products_42_reviews" && e.type === "view"),
+    ).toBe(true);
+  });
+
+  it("multiple dynamic segments are all replaced", async () => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/org/e2ebbbc5-f5e9-42eb-8913-4ef078b9b4a6/users/98765432" },
+      writable: true,
+      configurable: true,
+    });
+
+    configure({ autoScreenTracking: true });
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(
+      body.events.some((e: any) => e.name === "org_-id-_users_-id-" && e.type === "view"),
+    ).toBe(true);
+  });
+
+  it("paths without dynamic segments are unchanged", async () => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/settings" },
+      writable: true,
+      configurable: true,
+    });
+
+    configure({ autoScreenTracking: true });
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(body.events.some((e: any) => e.name === "settings" && e.type === "view")).toBe(true);
+  });
+
+  it("root path produces 'home'", async () => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/" },
+      writable: true,
+      configurable: true,
+    });
+
+    configure({ autoScreenTracking: true });
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(body.events.some((e: any) => e.name === "home" && e.type === "view")).toBe(true);
+  });
+});
+
 // ─── 10. Error Callback (2 tests) ────────────────────────────────────────────
 
 describe("Error Callback", () => {

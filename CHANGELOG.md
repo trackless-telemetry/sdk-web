@@ -5,6 +5,16 @@ All notable changes to the Trackless Telemetry Web SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-04-16
+
+### Added
+
+- **Distribution channel detection** — new `distributionChannel` context field captures `window.location.hostname` (e.g., `"www.example.com"`, `"blog.example.com"`), enabling filtering and grouping by source hostname in the dashboard.
+
+### Fixed
+
+- **Dynamic URL segment stripping** — auto screen tracking now strips UUIDs, long numeric IDs, and hex strings from URL path segments (e.g., `/apps/a1b2c3d4-.../sessions` becomes `/apps/-id-/sessions`), preventing high-cardinality view names from consuming cardinality budget.
+
 ## [0.2.4] - 2026-03-25
 
 ### Fixed
