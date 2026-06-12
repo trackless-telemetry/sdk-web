@@ -5,6 +5,18 @@ All notable changes to the Trackless Telemetry Web SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-11
+
+### Added
+
+- **Runtime severity validation** — `error()` now validates the severity value at runtime for plain-JavaScript callers. Invalid values fall back to the default `"error"` with a console warning (respects `suppressWarnings`). TypeScript callers were already constrained by the `ErrorSeverity` union.
+
+### Fixed
+
+- **Request body size limit** — flush now checks each serialized payload against the ingest endpoint's 50 KB body limit. Oversized payloads are split in half recursively until each request fits; a single event that exceeds the limit on its own is dropped with a console warning. Previously oversized batches were rejected server-side and the whole batch was lost.
+- **Buffer-full visibility** — when the event buffer reaches its 1000-item cap and starts rejecting new events, the SDK now emits a console warning (at most once per session, respects `suppressWarnings`) instead of dropping data silently.
+- **Pre-configure visibility** — event methods called before `configure()` now emit a one-time console warning (respects `suppressWarnings`) instead of dropping events silently.
+
 ## [0.2.5] - 2026-04-16
 
 ### Added
