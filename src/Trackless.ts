@@ -1,4 +1,4 @@
-import type { TracklessConfig, EventContext } from "./types.js";
+import type { TracklessConfig, EventContext, EventPayload } from "./types.js";
 import type { TracklessEvent, Environment, ErrorSeverity } from "./types.js";
 import { EventBuffer } from "./eventBuffer.js";
 import { CircuitBreaker } from "./circuitBreaker.js";
@@ -19,8 +19,8 @@ export type {
 
 /**
  * Event name validation regex.
- * Lowercase alphanumeric, dots (for hierarchical grouping), underscores, hyphens.
- * 1-100 characters. No leading/trailing/consecutive dots.
+ * Lowercase alphanumeric, dots, underscores, hyphens. 1-100 characters.
+ * No leading/trailing/consecutive dots.
  */
 const EVENT_NAME_REGEX = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/;
 const EVENT_NAME_MAX_LENGTH = 100;
@@ -39,6 +39,12 @@ const BUFFER_FLUSH_THRESHOLD = 100;
 
 /** Default production ingest endpoint */
 const DEFAULT_ENDPOINT = "https://api.tracklesstelemetry.com";
+
+/**
+ * Max serialized request body size accepted by the ingest endpoint: 50 KB.
+ * Mirrors MAX_REQUEST_BODY_SIZE_BYTES in @trackless/shared-config.
+ */
+const MAX_REQUEST_BODY_SIZE_BYTES = 50 * 1024;
 
 /**
  * Trackless — privacy-first analytics SDK for the web.
@@ -64,6 +70,12 @@ export const Severity = {
   FATAL: "fatal",
 } as const satisfies Record<string, ErrorSeverity>;
 
+/** Runtime set of severities accepted by the ingest endpoint (matches the ErrorSeverity union). */
+const VALID_SEVERITIES: ReadonlySet<string> = new Set(Object.values(Severity));
+
+/** Default severity when `error()` is called without one (or with an invalid value). */
+const DEFAULT_ERROR_SEVERITY: ErrorSeverity = "error";
+
 export class Trackless {
   private static apiKey: string = "";
   private static endpoint: string = "";
@@ -77,6 +89,11 @@ export class Trackless {
   private static enabled: boolean = false;
   private static destroyed = false;
   private static configured = false;
+
+  /** One-shot flag: warn at most once per session when the buffer rejects an event. */
+  private static bufferFullWarned = false;
+  /** One-shot flag: warn at most once when events are recorded while unconfigured. */
+  private static preConfigureWarned = false;
 
   private static buffer: EventBuffer = new EventBuffer();
   private static circuitBreaker: CircuitBreaker = new CircuitBreaker();
@@ -118,6 +135,8 @@ export class Trackless {
       Trackless.session = new SessionManager();
       Trackless.funnels = new FunnelTracker();
       Trackless.screenViewCooldowns = new Map();
+      Trackless.bufferFullWarned = false;
+      Trackless.preConfigureWarned = false;
       Trackless.destroyed = false;
       Trackless.configured = true;
 
@@ -246,11 +265,23 @@ export class Trackless {
   }
 
   /** Record an error event. */
-  static error(name: string, severity: ErrorSeverity = "error", code?: string): void {
+  static error(
+    name: string,
+    severity: ErrorSeverity = DEFAULT_ERROR_SEVERITY,
+    code?: string,
+  ): void {
     try {
       if (!Trackless.canRecord()) return;
       const normalized = Trackless.normalizeName(name);
       if (!normalized) return;
+
+      let validSeverity = severity;
+      if (!VALID_SEVERITIES.has(severity)) {
+        Trackless.warn(
+          `invalid error severity "${severity}" — falling back to "${DEFAULT_ERROR_SEVERITY}"`,
+        );
+        validSeverity = DEFAULT_ERROR_SEVERITY;
+      }
 
       const normalizedCode =
         code !== undefined ? Trackless.normalizeField(code, EVENT_NAME_MAX_LENGTH) : undefined;
@@ -258,11 +289,11 @@ export class Trackless {
       Trackless.addEvent({
         type: "error",
         name: normalized,
-        severity,
+        severity: validSeverity,
         ...(normalizedCode ? { code: normalizedCode } : {}),
       });
       Trackless.debug(
-        `error — ${normalized} severity=${severity}${normalizedCode ? ` code=${normalizedCode}` : ""}`,
+        `error — ${normalized} severity=${validSeverity}${normalizedCode ? ` code=${normalizedCode}` : ""}`,
       );
       Trackless.checkFlushThreshold();
     } catch {
@@ -326,6 +357,10 @@ export class Trackless {
   // ── Private helpers ───────────────────────────────────────────────────
 
   private static canRecord(): boolean {
+    if (!Trackless.configured && !Trackless.preConfigureWarned) {
+      Trackless.preConfigureWarned = true;
+      Trackless.warn("event dropped — SDK is not configured (call Trackless.configure() first)");
+    }
     return Trackless.enabled && !Trackless.destroyed && Trackless.configured;
   }
 
@@ -367,7 +402,10 @@ export class Trackless {
   }
 
   private static addEvent(event: TracklessEvent): void {
-    Trackless.buffer.add(event);
+    if (!Trackless.buffer.add(event) && !Trackless.bufferFullWarned) {
+      Trackless.bufferFullWarned = true;
+      Trackless.warn("event buffer full — new events are dropped until the next flush");
+    }
   }
 
   /**
@@ -450,7 +488,9 @@ export class Trackless {
       return;
     }
 
-    const payloads = Trackless.buffer.drain(Trackless.environment, Trackless.context);
+    const payloads = Trackless.buffer
+      .drain(Trackless.environment, Trackless.context)
+      .flatMap((payload) => Trackless.splitToBodyLimit(payload));
     if (payloads.length === 0) return;
 
     for (const payload of payloads) {
@@ -482,6 +522,34 @@ export class Trackless {
         Trackless.onError(error instanceof Error ? error : new Error("Flush failed"));
       }
     }
+  }
+
+  /**
+   * Split a payload into payloads whose serialized size fits the ingest
+   * request body limit. Oversized payloads have their events halved
+   * recursively; a single-event payload that still exceeds the limit is
+   * dropped with a warning. The wire format is unchanged — only the
+   * batching boundaries move.
+   */
+  private static splitToBodyLimit(payload: EventPayload): EventPayload[] {
+    if (Trackless.payloadByteSize(payload) <= MAX_REQUEST_BODY_SIZE_BYTES) return [payload];
+
+    if (payload.events.length <= 1) {
+      Trackless.warn("event dropped — serialized payload exceeds the request body size limit");
+      return [];
+    }
+
+    const mid = Math.ceil(payload.events.length / 2);
+    return [
+      ...Trackless.splitToBodyLimit({ ...payload, events: payload.events.slice(0, mid) }),
+      ...Trackless.splitToBodyLimit({ ...payload, events: payload.events.slice(mid) }),
+    ];
+  }
+
+  /** UTF-8 byte length of the serialized payload — matches the server-side Content-Length check. */
+  private static payloadByteSize(payload: EventPayload): number {
+    const json = JSON.stringify(payload);
+    return typeof TextEncoder === "undefined" ? json.length : new TextEncoder().encode(json).length;
   }
 
   private static startPeriodicFlush(): void {

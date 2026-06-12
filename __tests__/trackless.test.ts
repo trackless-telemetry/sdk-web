@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { Trackless } from "../src/Trackless.js";
+import { Trackless, Severity } from "../src/Trackless.js";
 import type { TracklessConfig } from "../src/types.js";
 import { EventBuffer } from "../src/eventBuffer.js";
 import { CircuitBreaker } from "../src/circuitBreaker.js";
@@ -1494,5 +1494,277 @@ describe("SDK Version", () => {
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
     expect(body.context.sdkVersion).toMatch(/^web\/\d+\.\d+\.\d+$/);
+  });
+});
+
+// ─── 17. Payload Size Limit (3 tests) ────────────────────────────────────────
+
+const MAX_REQUEST_BODY_SIZE_BYTES = 50 * 1024;
+
+describe("Payload Size Limit", () => {
+  it("splits payloads that exceed the 50KB body limit into multiple requests", async () => {
+    configure();
+    await Trackless.flush(); // flush session start
+    fetchSpy.mockClear();
+
+    // Four performance events, each ~21KB serialized (2600 durations × 8 bytes).
+    // Together they exceed 50KB but each half fits.
+    for (const name of ["metric_a", "metric_b", "metric_c", "metric_d"]) {
+      for (let i = 0; i < 2600; i++) {
+        Trackless.performance(name, 123.456);
+      }
+    }
+    await Trackless.flush();
+
+    expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    const allEvents: any[] = [];
+    for (const call of fetchSpy.mock.calls) {
+      const bodyStr = call[1].body as string;
+      // Every request body fits the server limit
+      expect(new TextEncoder().encode(bodyStr).length).toBeLessThanOrEqual(
+        MAX_REQUEST_BODY_SIZE_BYTES,
+      );
+      // Wire format is unchanged
+      const body = JSON.parse(bodyStr);
+      expect(body.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(body.environment).toBeDefined();
+      expect(body.context.platform).toBe("web");
+      allEvents.push(...body.events);
+    }
+
+    // No events lost across the split
+    const perfEvents = allEvents.filter((e) => e.type === "performance");
+    expect(perfEvents.map((e) => e.name).sort()).toEqual([
+      "metric_a",
+      "metric_b",
+      "metric_c",
+      "metric_d",
+    ]);
+    for (const event of perfEvents) {
+      expect(event.durations).toHaveLength(2600);
+    }
+  });
+
+  it("payloads under the limit are sent as a single request", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("small_feature");
+    Trackless.view("small_view");
+    await Trackless.flush();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a single event whose payload still exceeds the limit, keeps the rest", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // One performance event ~64KB serialized — cannot fit even alone
+    for (let i = 0; i < 8000; i++) {
+      Trackless.performance("huge_metric", 123.456);
+    }
+    Trackless.feature("small_feature");
+    await Trackless.flush();
+
+    const allEvents = fetchSpy.mock.calls.flatMap((call: any[]) => JSON.parse(call[1].body).events);
+    expect(allEvents.some((e: any) => e.name === "huge_metric")).toBe(false);
+    expect(allEvents.some((e: any) => e.name === "small_feature")).toBe(true);
+    for (const call of fetchSpy.mock.calls) {
+      expect(new TextEncoder().encode(call[1].body as string).length).toBeLessThanOrEqual(
+        MAX_REQUEST_BODY_SIZE_BYTES,
+      );
+    }
+
+    const dropWarns = warnSpy.mock.calls.filter(
+      (c) => String(c[0]).includes("[Trackless]") && String(c[0]).includes("body size limit"),
+    );
+    expect(dropWarns.length).toBe(1);
+    warnSpy.mockRestore();
+  });
+});
+
+// ─── 18. Buffer-Full Warning (3 tests) ───────────────────────────────────────
+
+describe("Buffer-Full Warning", () => {
+  /** Open the circuit breaker so the buffer stops draining and can fill up. */
+  async function openCircuitBreaker(): Promise<void> {
+    Trackless.feature("seed");
+    await Trackless.flush(); // drains, fails, opens circuit breaker
+  }
+
+  it("warns exactly once when the buffer rejects events because it is full", async () => {
+    fetchSpy.mockRejectedValue(new Error("down"));
+    configure({ onError: () => {} });
+    await openCircuitBreaker();
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Buffer max is 1000 unique items — overflow it with room to spare
+    for (let i = 0; i < 1005; i++) {
+      Trackless.feature(`item_${i}`);
+    }
+
+    const bufferWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("buffer full"));
+    expect(bufferWarns.length).toBe(1);
+    warnSpy.mockRestore();
+  });
+
+  it("buffer-full warning can fire again after a new configure()", async () => {
+    fetchSpy.mockRejectedValue(new Error("down"));
+    configure({ onError: () => {} });
+    await openCircuitBreaker();
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (let i = 0; i < 1005; i++) {
+      Trackless.feature(`item_${i}`);
+    }
+
+    configure({ onError: () => {} }); // new session resets the once-per-session flag
+    await openCircuitBreaker();
+    for (let i = 0; i < 1005; i++) {
+      Trackless.feature(`other_${i}`);
+    }
+
+    const bufferWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("buffer full"));
+    expect(bufferWarns.length).toBe(2);
+    warnSpy.mockRestore();
+  });
+
+  it("buffer-full warning respects suppressWarnings", async () => {
+    fetchSpy.mockRejectedValue(new Error("down"));
+    configure({ suppressWarnings: true, onError: () => {} });
+    await openCircuitBreaker();
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (let i = 0; i < 1005; i++) {
+      Trackless.feature(`item_${i}`);
+    }
+
+    const tracklessWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("[Trackless]"));
+    expect(tracklessWarns.length).toBe(0);
+    warnSpy.mockRestore();
+  });
+});
+
+// ─── 19. Pre-Configure Warning (3 tests) ─────────────────────────────────────
+
+describe("Pre-Configure Warning", () => {
+  it("warns once when event methods are called while unconfigured", async () => {
+    configure(); // reset suppressWarnings and the once-only flag
+    await Trackless.destroy(); // back to unconfigured state
+    fetchSpy.mockClear();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    Trackless.feature("too_early");
+    Trackless.view("also_early");
+    Trackless.error("early_error");
+
+    const preWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("not configured"));
+    expect(preWarns.length).toBe(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("pre-configure warning respects suppressWarnings", async () => {
+    configure({ suppressWarnings: true });
+    await Trackless.destroy();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    Trackless.feature("too_early");
+
+    const tracklessWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("[Trackless]"));
+    expect(tracklessWarns.length).toBe(0);
+    warnSpy.mockRestore();
+  });
+
+  it("no pre-configure warning when events are dropped because enabled is false", async () => {
+    configure({ enabled: false });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    Trackless.feature("ignored");
+
+    const preWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("not configured"));
+    expect(preWarns.length).toBe(0);
+    warnSpy.mockRestore();
+  });
+});
+
+// ─── 20. Error Severity Validation (5 tests) ─────────────────────────────────
+
+describe("Error Severity Validation", () => {
+  it("Severity constants cover exactly the values accepted by the server", () => {
+    expect(Object.values(Severity).sort()).toEqual(["debug", "error", "fatal", "info", "warning"]);
+  });
+
+  it("accepts all valid severity values unchanged", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.error("e_debug", "debug");
+    Trackless.error("e_info", "info");
+    Trackless.error("e_warning", "warning");
+    Trackless.error("e_error", "error");
+    Trackless.error("e_fatal", "fatal");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const severities = body.events
+      .filter((e: any) => e.type === "error")
+      .map((e: any) => e.severity)
+      .sort();
+    expect(severities).toEqual(["debug", "error", "fatal", "info", "warning"]);
+  });
+
+  it("default severity is 'error' when omitted", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.error("crash");
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const errEvent = body.events.find((e: any) => e.type === "error");
+    expect(errEvent.severity).toBe("error");
+  });
+
+  it("invalid severity falls back to 'error' with a warning", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    Trackless.error("crash", "catastrophic" as any);
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const errEvent = body.events.find((e: any) => e.type === "error");
+    expect(errEvent.severity).toBe("error");
+
+    const sevWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("severity"));
+    expect(sevWarns.length).toBe(1);
+    warnSpy.mockRestore();
+  });
+
+  it("severity fallback warning respects suppressWarnings", async () => {
+    configure({ suppressWarnings: true });
+    await Trackless.flush();
+    fetchSpy.mockClear();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    Trackless.error("crash", "bogus" as any);
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(body.events.find((e: any) => e.type === "error").severity).toBe("error");
+
+    const tracklessWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("[Trackless]"));
+    expect(tracklessWarns.length).toBe(0);
+    warnSpy.mockRestore();
   });
 });

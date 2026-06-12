@@ -1,6 +1,6 @@
 {
   "name": "@trackless-telemetry/sdk-web",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "description": "Privacy-first web analytics SDK — zero dependencies, zero cookies, zero client persistence. Collects only aggregate feature usage counts.",
   "keywords": [
     "analytics",
@@ -44,6 +44,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "jsdom": "^26",
     "typescript": "^5",
     "vite": "^6",
     "vitest": "^3"
