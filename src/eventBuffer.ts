@@ -48,11 +48,20 @@ export class EventBuffer {
 
     if (existing) {
       existing.count = (existing.count ?? 1) + (event.count ?? 1);
+      // Sum feature-reach first uses. Only present on feature events, and only
+      // on the incoming event that carried a session first-use. A session
+      // boundary between flushes can legitimately push firstUses above 1 for a
+      // single rolled-up key (e.g. firstUses: 2, count: 7).
+      if (event.firstUses !== undefined) {
+        existing.firstUses = (existing.firstUses ?? 0) + event.firstUses;
+      }
       return true;
     }
 
     if (this.totalSize >= this.maxItems) return false;
 
+    // Spread carries `firstUses` through only when the event actually had one;
+    // a repeat or different-detail entry stays without the field (never 0).
     this.aggregated.set(key, { ...event, count: event.count ?? 1 });
     return true;
   }
@@ -91,6 +100,16 @@ export class EventBuffer {
 
   /** Drain the buffer into an EventPayload and clear it. */
   drain(environment: Environment, context: EventContext): EventPayload[] {
+    // `firstUses` is a positive-only wire field: the ingest validator rejects
+    // `firstUses < 1` (e.g. a different-detail entry that never received a
+    // session first-use). Drop any non-positive value so it is omitted from the
+    // serialized payload rather than sent as 0.
+    for (const event of this.aggregated.values()) {
+      if (event.firstUses !== undefined && !(event.firstUses >= 1)) {
+        delete event.firstUses;
+      }
+    }
+
     const allEvents: TracklessEvent[] = [...this.aggregated.values(), ...this.individual];
 
     this.aggregated.clear();

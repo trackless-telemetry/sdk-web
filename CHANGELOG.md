@@ -5,11 +5,12 @@ All notable changes to the Trackless Telemetry Web SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - 2026-06-11
+## [0.3.0] - 2026-07-21
 
 ### Added
 
 - **Runtime severity validation** — `error()` now validates the severity value at runtime for plain-JavaScript callers. Invalid values fall back to the default `"error"` with a console warning (respects `suppressWarnings`). TypeScript callers were already constrained by the `ErrorSeverity` union.
+- **Feature session reach** — `feature()` now marks the first use of each feature within a session by sending `firstUses: 1` on that first event only, powering session-reach analytics (the share of sessions that use a feature at least once) in the dashboard. Deduplication is by normalized feature name only (not `name + detail`), so a session using several variants counts once toward reach. The first-use set is in-memory, resets on session end (like funnel state), and survives mid-session flushes; client-side rollup sums `firstUses` per key. No code changes required and no new data is stored client-side.
 
 ### Fixed
 

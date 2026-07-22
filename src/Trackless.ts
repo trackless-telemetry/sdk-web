@@ -5,6 +5,7 @@ import { CircuitBreaker } from "./circuitBreaker.js";
 import { detectContext } from "./context.js";
 import { SessionManager } from "./session.js";
 import { FunnelTracker } from "./funnel.js";
+import { FeatureReachTracker } from "./featureReach.js";
 import { sendPayload } from "./http.js";
 
 export type { TracklessConfig } from "./types.js";
@@ -100,6 +101,8 @@ export class Trackless {
   private static context: EventContext = { platform: "web" };
   private static session: SessionManager = new SessionManager();
   private static funnels: FunnelTracker = new FunnelTracker();
+  /** Per-session first-use set backing feature-reach `firstUses` marking. Reset on session end. */
+  private static featureReach: FeatureReachTracker = new FeatureReachTracker();
 
   private static flushTimer: ReturnType<typeof setInterval> | null = null;
   private static visibilityHandler: (() => void) | null = null;
@@ -134,6 +137,7 @@ export class Trackless {
       Trackless.context = detectContext(config.appVersion, config.buildNumber);
       Trackless.session = new SessionManager();
       Trackless.funnels = new FunnelTracker();
+      Trackless.featureReach = new FeatureReachTracker();
       Trackless.screenViewCooldowns = new Map();
       Trackless.bufferFullWarned = false;
       Trackless.preConfigureWarned = false;
@@ -193,13 +197,20 @@ export class Trackless {
       const normalizedDetail =
         detail !== undefined ? Trackless.normalizeField(detail, EVENT_NAME_MAX_LENGTH) : undefined;
       Trackless.session.recordActivity();
+      // Mark the first use of this feature name within the session (reach dedup).
+      // Keyed on the normalized name only — not name+detail — so a session using
+      // several variants of one feature contributes a single first use.
+      const isFirstUse = Trackless.featureReach.firstUse(normalized);
       Trackless.addEvent({
         type: "feature",
         name: normalized,
         ...(normalizedDetail ? { detail: normalizedDetail } : {}),
+        ...(isFirstUse ? { firstUses: 1 } : {}),
       });
       Trackless.debug(
-        `feature — ${normalized}${normalizedDetail ? ` detail=${normalizedDetail}` : ""}`,
+        `feature — ${normalized}${normalizedDetail ? ` detail=${normalizedDetail}` : ""}${
+          isFirstUse ? " (first use)" : ""
+        }`,
       );
       Trackless.checkFlushThreshold();
     } catch {
@@ -347,6 +358,7 @@ export class Trackless {
       Trackless.teardownAutoScreenTracking();
       Trackless.screenViewCooldowns.clear();
       Trackless.funnels.clear();
+      Trackless.featureReach.clear();
       Trackless.session.destroy();
       Trackless.configured = false;
     } catch {
@@ -465,6 +477,7 @@ export class Trackless {
     const result = Trackless.session.end();
     if (result) {
       Trackless.funnels.clear();
+      Trackless.featureReach.clear();
       Trackless.addEvent({
         type: "session",
         name: "end",

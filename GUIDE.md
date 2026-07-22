@@ -264,6 +264,13 @@ Trackless.feature("sort", "price_low_to_high");
 
 **When to use:** Button clicks, toggles, actions — any user-initiated feature interaction.
 
+#### Session reach (automatic)
+
+The SDK automatically marks the **first use of each feature within a session**, so the dashboard can report **session reach** — the share of sessions that use a feature at least once — alongside raw usage counts. Reach distinguishes breadth (many sessions each using a feature once) from depth (few sessions using it heavily). No code is needed; it is derived from your existing `feature()` calls.
+
+- **Deduplicated by normalized name only** (not `name + detail`): a session that exercises several `detail` variants of one feature contributes a single first use, so reach is never inflated by variant-hopping within a session.
+- **Resets on session end**, exactly like funnel state — a new session re-marks first uses. The tracking set is in-memory only (no cookies or storage) and cannot link sessions, preserving the privacy model.
+
 ### Funnel Steps
 
 Track progression through multi-step flows. Each step has a developer-defined index (0-based) that determines its position in the funnel:

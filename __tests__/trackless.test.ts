@@ -10,6 +10,7 @@ import type { TracklessConfig } from "../src/types.js";
 import { EventBuffer } from "../src/eventBuffer.js";
 import { CircuitBreaker } from "../src/circuitBreaker.js";
 import { FunnelTracker } from "../src/funnel.js";
+import { FeatureReachTracker } from "../src/featureReach.js";
 import { SessionManager } from "../src/session.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -1766,5 +1767,245 @@ describe("Error Severity Validation", () => {
     const tracklessWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("[Trackless]"));
     expect(tracklessWarns.length).toBe(0);
     warnSpy.mockRestore();
+  });
+});
+
+// ─── 21. Feature Reach — FeatureReachTracker (3 tests) ───────────────────────
+
+describe("FeatureReachTracker", () => {
+  it("marks the first use true and repeats false", () => {
+    const tracker = new FeatureReachTracker();
+    expect(tracker.firstUse("export_clicked")).toBe(true);
+    expect(tracker.firstUse("export_clicked")).toBe(false);
+    expect(tracker.firstUse("export_clicked")).toBe(false);
+  });
+
+  it("dedups distinct names independently", () => {
+    const tracker = new FeatureReachTracker();
+    expect(tracker.firstUse("export")).toBe(true);
+    expect(tracker.firstUse("import")).toBe(true);
+    expect(tracker.firstUse("export")).toBe(false);
+    expect(tracker.firstUse("import")).toBe(false);
+  });
+
+  it("clear() resets so the next use counts as a first use again", () => {
+    const tracker = new FeatureReachTracker();
+    expect(tracker.firstUse("export")).toBe(true);
+    tracker.clear();
+    expect(tracker.firstUse("export")).toBe(true);
+  });
+});
+
+// ─── 22. Feature Reach — buffer rollup of firstUses (4 tests) ─────────────────
+
+describe("Feature Reach — buffer rollup", () => {
+  it("addCountable sums firstUses across adds (cross-session-boundary rollup)", () => {
+    const buffer = new EventBuffer();
+    buffer.add({ type: "feature", name: "x", firstUses: 1 }); // session 1 first use
+    buffer.add({ type: "feature", name: "x", firstUses: 1 }); // session 2 first use, same key, pre-flush
+    buffer.add({ type: "feature", name: "x" }); // repeat, no marker
+
+    const payloads = buffer.drain("production", { platform: "web" });
+    const event = payloads[0].events.find((e) => e.name === "x");
+    expect(event?.count).toBe(3);
+    expect(event?.firstUses).toBe(2);
+  });
+
+  it("a different-detail entry carries no firstUses (never 0)", () => {
+    const buffer = new EventBuffer();
+    buffer.add({ type: "feature", name: "x", detail: "a", firstUses: 1 }); // first use → variant a
+    buffer.add({ type: "feature", name: "x", detail: "b" }); // later use, different detail → separate key
+
+    const payloads = buffer.drain("production", { platform: "web" });
+    const events = payloads[0].events;
+    const a = events.find((e) => e.detail === "a");
+    const b = events.find((e) => e.detail === "b");
+    expect(a?.firstUses).toBe(1);
+    expect(b?.firstUses).toBeUndefined();
+    expect("firstUses" in (b as object)).toBe(false);
+  });
+
+  it("a repeat-only entry carries no firstUses", () => {
+    const buffer = new EventBuffer();
+    // Name already seen earlier this session and flushed — later uses arrive unmarked.
+    buffer.add({ type: "feature", name: "y" });
+    buffer.add({ type: "feature", name: "y" });
+
+    const payloads = buffer.drain("production", { platform: "web" });
+    const event = payloads[0].events.find((e) => e.name === "y");
+    expect(event?.count).toBe(2);
+    expect(event?.firstUses).toBeUndefined();
+  });
+
+  it("drain drops a non-positive firstUses so it never reaches the wire", () => {
+    const buffer = new EventBuffer();
+    buffer.add({ type: "feature", name: "z", firstUses: 0 });
+
+    const payloads = buffer.drain("production", { platform: "web" });
+    const event = payloads[0].events.find((e) => e.name === "z");
+    expect(event?.firstUses).toBeUndefined();
+    expect("firstUses" in (event as object)).toBe(false);
+  });
+});
+
+// ─── 23. Feature Reach — feature() first-use marking (7 tests) ────────────────
+
+describe("Feature Reach — feature() first-use marking", () => {
+  function featureEvent(callIndex: number, name = "export_clicked"): any {
+    const body = JSON.parse(fetchSpy.mock.calls[callIndex][1].body);
+    return body.events.find((e: any) => e.type === "feature" && e.name === name);
+  }
+
+  it("first feature() carries firstUses:1; a later repeat (separate flush) carries none", async () => {
+    configure();
+    await Trackless.flush(); // drain session:start
+    fetchSpy.mockClear();
+
+    Trackless.feature("export_clicked"); // first use
+    await Trackless.flush();
+    expect(featureEvent(0).firstUses).toBe(1);
+    fetchSpy.mockClear();
+
+    Trackless.feature("export_clicked"); // repeat, same session
+    await Trackless.flush();
+    expect(featureEvent(0).firstUses).toBeUndefined();
+  });
+
+  it("repeats within a single flush roll up to count>1 with firstUses:1", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("save");
+    Trackless.feature("save");
+    Trackless.feature("save");
+    await Trackless.flush();
+
+    const event = featureEvent(0, "save");
+    expect(event.count).toBe(3);
+    expect(event.firstUses).toBe(1);
+  });
+
+  it("distinct feature names dedup independently", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("alpha");
+    Trackless.feature("beta");
+    Trackless.feature("alpha"); // repeat
+    Trackless.feature("beta"); // repeat
+    await Trackless.flush();
+
+    const events = JSON.parse(fetchSpy.mock.calls[0][1].body).events;
+    const alpha = events.find((e: any) => e.name === "alpha");
+    const beta = events.find((e: any) => e.name === "beta");
+    expect(alpha.count).toBe(2);
+    expect(alpha.firstUses).toBe(1);
+    expect(beta.count).toBe(2);
+    expect(beta.firstUses).toBe(1);
+  });
+
+  it("dedup runs on the normalized name (natural-string variants share one first use)", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("Export Clicked"); // normalizes to export_clicked → first use
+    Trackless.feature("export_clicked"); // same normalized name → repeat
+    await Trackless.flush();
+
+    const features = JSON.parse(fetchSpy.mock.calls[0][1].body).events.filter(
+      (e: any) => e.type === "feature",
+    );
+    expect(features).toHaveLength(1);
+    expect(features[0].name).toBe("export_clicked");
+    expect(features[0].count).toBe(2);
+    expect(features[0].firstUses).toBe(1);
+  });
+
+  it("reach dedup is by name only, not name+detail", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.feature("share", "twitter"); // first use of "share" → marks the twitter variant
+    Trackless.feature("share", "email"); // same name, different detail → no new first use
+    await Trackless.flush();
+
+    const events = JSON.parse(fetchSpy.mock.calls[0][1].body).events.filter(
+      (e: any) => e.type === "feature" && e.name === "share",
+    );
+    const twitter = events.find((e: any) => e.detail === "twitter");
+    const email = events.find((e: any) => e.detail === "email");
+    expect(twitter.firstUses).toBe(1);
+    expect(email.firstUses).toBeUndefined();
+    // Reach summed across variants is exactly 1 for this session.
+    const totalFirstUses = events.reduce((s: number, e: any) => s + (e.firstUses ?? 0), 0);
+    expect(totalFirstUses).toBe(1);
+  });
+
+  it("first-use set survives a mid-session flush but re-marks after session end", async () => {
+    configure();
+    await Trackless.flush(); // drain session:start
+    fetchSpy.mockClear();
+
+    // Session 1: first use → firstUses:1
+    Trackless.feature("export_clicked");
+    await Trackless.flush();
+    expect(featureEvent(0).firstUses).toBe(1);
+    fetchSpy.mockClear();
+
+    // Still session 1 — the set survived the flush: repeat → no firstUses
+    Trackless.feature("export_clicked");
+    await Trackless.flush();
+    expect(featureEvent(0).firstUses).toBeUndefined();
+
+    // End session 1 (tab hidden) then start session 2 (tab visible)
+    Object.defineProperty(document, "visibilityState", {
+      value: "hidden",
+      writable: true,
+      configurable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0); // let the keepalive flush settle
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      writable: true,
+      configurable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange")); // startNewSession
+    fetchSpy.mockClear();
+
+    // Session 2: first use of the same feature → firstUses:1 again
+    Trackless.feature("export_clicked");
+    await Trackless.flush();
+    expect(featureEvent(0).firstUses).toBe(1);
+
+    // restore default visibility
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  it("only feature events ever carry firstUses", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.view("home");
+    Trackless.feature("export_clicked");
+    Trackless.funnel("checkout", 0, "cart");
+    Trackless.performance("api", 1.0);
+    Trackless.error("boom");
+    await Trackless.flush();
+
+    const events = JSON.parse(fetchSpy.mock.calls[0][1].body).events;
+    for (const e of events) {
+      if (e.type !== "feature") expect(e.firstUses).toBeUndefined();
+    }
+    expect(events.find((e: any) => e.type === "feature").firstUses).toBe(1);
   });
 });

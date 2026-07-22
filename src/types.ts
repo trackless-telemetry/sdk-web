@@ -5,7 +5,7 @@ import type {
   IngestResponse,
   Environment,
   ErrorSeverity,
-} from "@trackless/shared-types";
+} from "./wire.js";
 
 /** SDK configuration options */
 export interface TracklessConfig {
