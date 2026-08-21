@@ -527,7 +527,7 @@ Trackless collects **no user identifiers** and stores **only aggregate counts**.
 - **No individual performance measurements stored** — durations are aggregated server-side into statistical digests (t-digest)
 - **PII auto-stripping** — email addresses, phone numbers, and SSN patterns are automatically stripped from all event fields before buffering
 
-The only context collected is: platform (`"web"`), OS version (major.minor from user agent), device class (phone/tablet/desktop from screen width heuristic), locale (from `navigator.language`), language (ISO 639-1 code from `navigator.language`, e.g., `"en"`), `sdkVersion` (e.g., `web/0.3.0`), and distribution channel (the page hostname, e.g., `"www.example.com"`). All are coarse, non-identifying dimensions.
+The only context collected is: platform (`"web"`), OS version (major.minor from user agent), device class (phone/tablet/desktop from screen width heuristic), locale (from `navigator.language`), language (ISO 639-1 code from `navigator.language`, e.g., `"en"`), `sdkVersion` (e.g., `web/0.4.0`), and distribution channel (the page hostname, e.g., `"www.example.com"`). All are coarse, non-identifying dimensions.
 
 ## 10. Environment Variables
 

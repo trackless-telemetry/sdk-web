@@ -6,6 +6,7 @@ import { detectContext } from "./context.js";
 import { SessionManager } from "./session.js";
 import { FunnelTracker } from "./funnel.js";
 import { FeatureReachTracker } from "./featureReach.js";
+import { ErrorReachTracker } from "./errorReach.js";
 import { sendPayload } from "./http.js";
 
 export type { TracklessConfig } from "./types.js";
@@ -103,6 +104,8 @@ export class Trackless {
   private static funnels: FunnelTracker = new FunnelTracker();
   /** Per-session first-use set backing feature-reach `firstUses` marking. Reset on session end. */
   private static featureReach: FeatureReachTracker = new FeatureReachTracker();
+  /** Per-session first-occurrence set backing error-reach `firstOccurrences` marking. Reset on session end. */
+  private static errorReach: ErrorReachTracker = new ErrorReachTracker();
 
   private static flushTimer: ReturnType<typeof setInterval> | null = null;
   private static visibilityHandler: (() => void) | null = null;
@@ -138,6 +141,7 @@ export class Trackless {
       Trackless.session = new SessionManager();
       Trackless.funnels = new FunnelTracker();
       Trackless.featureReach = new FeatureReachTracker();
+      Trackless.errorReach = new ErrorReachTracker();
       Trackless.screenViewCooldowns = new Map();
       Trackless.bufferFullWarned = false;
       Trackless.preConfigureWarned = false;
@@ -297,14 +301,22 @@ export class Trackless {
       const normalizedCode =
         code !== undefined ? Trackless.normalizeField(code, EVENT_NAME_MAX_LENGTH) : undefined;
       Trackless.session.recordActivity();
+      // Mark the first occurrence of this error name within the session (reach
+      // dedup). Keyed on the normalized name only — not name+severity+code — so
+      // a session reporting one error at several severities or codes contributes
+      // a single first occurrence.
+      const isFirstOccurrence = Trackless.errorReach.firstOccurrence(normalized);
       Trackless.addEvent({
         type: "error",
         name: normalized,
         severity: validSeverity,
         ...(normalizedCode ? { code: normalizedCode } : {}),
+        ...(isFirstOccurrence ? { firstOccurrences: 1 } : {}),
       });
       Trackless.debug(
-        `error — ${normalized} severity=${validSeverity}${normalizedCode ? ` code=${normalizedCode}` : ""}`,
+        `error — ${normalized} severity=${validSeverity}${normalizedCode ? ` code=${normalizedCode}` : ""}${
+          isFirstOccurrence ? " (first occurrence)" : ""
+        }`,
       );
       Trackless.checkFlushThreshold();
     } catch {
@@ -359,6 +371,7 @@ export class Trackless {
       Trackless.screenViewCooldowns.clear();
       Trackless.funnels.clear();
       Trackless.featureReach.clear();
+      Trackless.errorReach.clear();
       Trackless.session.destroy();
       Trackless.configured = false;
     } catch {
@@ -478,6 +491,7 @@ export class Trackless {
     if (result) {
       Trackless.funnels.clear();
       Trackless.featureReach.clear();
+      Trackless.errorReach.clear();
       Trackless.addEvent({
         type: "session",
         name: "end",

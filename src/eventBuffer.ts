@@ -55,13 +55,20 @@ export class EventBuffer {
       if (event.firstUses !== undefined) {
         existing.firstUses = (existing.firstUses ?? 0) + event.firstUses;
       }
+      // Sum error-reach first occurrences. Same shape as `firstUses`, but only
+      // present on error events, and only on the incoming event that carried a
+      // session first occurrence.
+      if (event.firstOccurrences !== undefined) {
+        existing.firstOccurrences = (existing.firstOccurrences ?? 0) + event.firstOccurrences;
+      }
       return true;
     }
 
     if (this.totalSize >= this.maxItems) return false;
 
-    // Spread carries `firstUses` through only when the event actually had one;
-    // a repeat or different-detail entry stays without the field (never 0).
+    // Spread carries `firstUses`/`firstOccurrences` through only when the event
+    // actually had one; a repeat or different-variant entry stays without the
+    // field (never 0).
     this.aggregated.set(key, { ...event, count: event.count ?? 1 });
     return true;
   }
@@ -100,13 +107,16 @@ export class EventBuffer {
 
   /** Drain the buffer into an EventPayload and clear it. */
   drain(environment: Environment, context: EventContext): EventPayload[] {
-    // `firstUses` is a positive-only wire field: the ingest validator rejects
-    // `firstUses < 1` (e.g. a different-detail entry that never received a
-    // session first-use). Drop any non-positive value so it is omitted from the
-    // serialized payload rather than sent as 0.
+    // `firstUses` and `firstOccurrences` are positive-only wire fields: the
+    // ingest validator rejects values < 1 (e.g. a different-detail entry that
+    // never received a session first use). Drop any non-positive value so it is
+    // omitted from the serialized payload rather than sent as 0.
     for (const event of this.aggregated.values()) {
       if (event.firstUses !== undefined && !(event.firstUses >= 1)) {
         delete event.firstUses;
+      }
+      if (event.firstOccurrences !== undefined && !(event.firstOccurrences >= 1)) {
+        delete event.firstOccurrences;
       }
     }
 

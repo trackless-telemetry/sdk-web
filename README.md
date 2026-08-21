@@ -192,8 +192,16 @@ The SDK captures a small set of **coarse, non-identifying** dimensions:
 | `language`            | `"en"`              | `navigator.language` (ISO 639-1 code)                     |
 | `appVersion`          | `"2.1.0"`           | Developer-provided via config                             |
 | `buildNumber`         | `"142"`             | Developer-provided via config                             |
-| `sdkVersion`          | `"web/0.3.0"`       | SDK platform and version identifier                       |
-| `distributionChannel` | `"www.example.com"` | `window.location.hostname`                                |
+| `sdkVersion`          | `"web/0.4.0"`       | SDK platform and version identifier                       |
+| `distributionChannel` | `"www.example.com"` | `window.location.hostname` (see note below)               |
+
+> **`distributionChannel` means something different on web.** On iOS and Android it is
+> one of a fixed set of install sources (`app_store`, `testflight`, `play_store`, ...).
+> On web there is no install step, so the field carries the page hostname instead, and
+> it is therefore open-ended rather than a closed set. Every distinct hostname your site
+> is served from -- per-tenant subdomains, preview deployments, staging aliases -- is
+> recorded as its own dimension value and broken out separately in your aggregates. If
+> your site serves many hostnames, expect that breakdown to be correspondingly wide.
 
 ## What Trackless Does NOT Collect
 

@@ -8,7 +8,7 @@ class h {
   }
   addCountable(t) {
     const r = this.rollupKey(t), i = this.aggregated.get(r);
-    return i ? (i.count = (i.count ?? 1) + (t.count ?? 1), t.firstUses !== void 0 && (i.firstUses = (i.firstUses ?? 0) + t.firstUses), !0) : this.totalSize >= this.maxItems ? !1 : (this.aggregated.set(r, { ...t, count: t.count ?? 1 }), !0);
+    return i ? (i.count = (i.count ?? 1) + (t.count ?? 1), t.firstUses !== void 0 && (i.firstUses = (i.firstUses ?? 0) + t.firstUses), t.firstOccurrences !== void 0 && (i.firstOccurrences = (i.firstOccurrences ?? 0) + t.firstOccurrences), !0) : this.totalSize >= this.maxItems ? !1 : (this.aggregated.set(r, { ...t, count: t.count ?? 1 }), !0);
   }
   addPerformance(t) {
     const r = this.rollupKey(t), i = this.aggregated.get(r);
@@ -20,19 +20,19 @@ class h {
   }
   /** Drain the buffer into an EventPayload and clear it. */
   drain(t, r) {
-    for (const c of this.aggregated.values())
-      c.firstUses !== void 0 && !(c.firstUses >= 1) && delete c.firstUses;
+    for (const o of this.aggregated.values())
+      o.firstUses !== void 0 && !(o.firstUses >= 1) && delete o.firstUses, o.firstOccurrences !== void 0 && !(o.firstOccurrences >= 1) && delete o.firstOccurrences;
     const i = [...this.aggregated.values(), ...this.individual];
     if (this.aggregated.clear(), this.individual = [], i.length === 0) return [];
-    const n = /* @__PURE__ */ new Date(), s = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`, o = [];
-    for (let c = 0; c < i.length; c += 100)
-      o.push({
+    const n = /* @__PURE__ */ new Date(), s = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`, c = [];
+    for (let o = 0; o < i.length; o += 100)
+      c.push({
         date: s,
         environment: t,
         context: r,
-        events: i.slice(c, c + 100)
+        events: i.slice(o, o + 100)
       });
-    return o;
+    return c;
   }
   /** Clear the buffer without draining */
   clear() {
@@ -87,24 +87,24 @@ class g {
     return this.consecutiveFailures;
   }
 }
-const S = "0.3.0", b = {
-  version: S
+const b = "0.4.0", $ = {
+  version: b
 };
 function l() {
   return typeof navigator < "u" ? navigator : {};
 }
-function $(a, t) {
+function R(a, t) {
   return {
     platform: "web",
     osVersion: F(),
     deviceClass: A(),
-    region: R(),
-    language: L(),
-    browser: D(),
-    os: N(),
+    region: L(),
+    language: D(),
+    browser: N(),
+    os: T(),
     appVersion: a,
     buildNumber: t,
-    sdkVersion: `web/${b.version}`,
+    sdkVersion: `web/${$.version}`,
     distributionChannel: typeof window < "u" ? window.location.hostname : void 0
     // daysSinceInstall omitted — web has no install concept
   };
@@ -127,8 +127,8 @@ function F() {
     if (!r) {
       const s = t.match(/Android (\d+(?:\.\d+)?)/);
       if (s) {
-        const o = s[1];
-        r = o.includes(".") ? o : `${o}.0`;
+        const c = s[1];
+        r = c.includes(".") ? c : `${c}.0`;
       }
     }
     if (!r) {
@@ -150,7 +150,7 @@ function A() {
     return;
   }
 }
-function R() {
+function L() {
   var a, t;
   try {
     const r = ((a = navigator.languages) == null ? void 0 : a[0]) ?? navigator.language;
@@ -163,7 +163,7 @@ function R() {
     return;
   }
 }
-function L() {
+function D() {
   var a;
   try {
     const t = ((a = navigator.languages) == null ? void 0 : a[0]) ?? navigator.language;
@@ -176,7 +176,7 @@ function L() {
     return;
   }
 }
-function D() {
+function N() {
   try {
     const a = l();
     if (a.webdriver) return "bot";
@@ -192,7 +192,7 @@ function D() {
     return "other";
   }
 }
-function N() {
+function T() {
   try {
     const a = l().userAgentData;
     if (a != null && a.platform) {
@@ -272,11 +272,28 @@ class y {
     this.seen.clear();
   }
 }
-const T = 1e4;
-async function C(a, t, r, i = T, n = !1) {
-  const s = new AbortController(), o = setTimeout(() => s.abort(), i);
+class E {
+  constructor() {
+    this.seen = /* @__PURE__ */ new Set();
+  }
+  /**
+   * Check and record the first occurrence of an error name this session.
+   *
+   * @returns true if this is the first occurrence of the name this session, false otherwise
+   */
+  firstOccurrence(t) {
+    return this.seen.has(t) ? !1 : (this.seen.add(t), !0);
+  }
+  /** Clear all first-occurrence state (call on session end). */
+  clear() {
+    this.seen.clear();
+  }
+}
+const C = 1e4;
+async function O(a, t, r, i = C, n = !1) {
+  const s = new AbortController(), c = setTimeout(() => s.abort(), i);
   try {
-    const c = await fetch(a, {
+    const o = await fetch(a, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -286,24 +303,24 @@ async function C(a, t, r, i = T, n = !1) {
       signal: s.signal,
       keepalive: n
     });
-    clearTimeout(o);
+    clearTimeout(c);
     let f;
     try {
-      f = await c.json();
+      f = await o.json();
     } catch {
     }
-    return { status: c.status, body: f };
-  } catch (c) {
-    throw clearTimeout(o), c;
+    return { status: o.status, body: f };
+  } catch (o) {
+    throw clearTimeout(c), o;
   }
 }
-const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, E = 60, z = 1e4, M = 6e4, I = 100, H = "https://api.tracklesstelemetry.com", O = 50 * 1024, V = {
+const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = 60, z = 1e4, M = 6e4, I = 100, H = "https://api.tracklesstelemetry.com", V = 50 * 1024, P = {
   DEBUG: "debug",
   INFO: "info",
   WARNING: "warning",
   ERROR: "error",
   FATAL: "fatal"
-}, P = new Set(Object.values(V)), d = "error", e = class e {
+}, X = new Set(Object.values(P)), d = "error", e = class e {
   /** Whether the SDK has been configured and is ready to record events. */
   static get isConfigured() {
     return e.configured && !e.destroyed;
@@ -312,7 +329,7 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, E = 60, z = 1e4, M = 6e4, I 
   static configure(t) {
     try {
       e.apiKey = t.apiKey, e.endpoint = t.endpoint ?? H, e.environment = t.environment ?? "production", e.enabled = t.enabled ?? !0, e.onError = t.onError ?? (() => {
-      }), e.flushIntervalSeconds = t.flushIntervalSeconds ?? E, e.autoScreenTracking = t.autoScreenTracking ?? !1, e.debugLogging = t.debugLogging ?? !1, e.suppressWarnings = t.suppressWarnings ?? !1, e.buffer = new h(), e.circuitBreaker = new g(), e.context = $(t.appVersion, t.buildNumber), e.session = new m(), e.funnels = new w(), e.featureReach = new y(), e.screenViewCooldowns = /* @__PURE__ */ new Map(), e.bufferFullWarned = !1, e.preConfigureWarned = !1, e.destroyed = !1, e.configured = !0, e.debug(
+      }), e.flushIntervalSeconds = t.flushIntervalSeconds ?? v, e.autoScreenTracking = t.autoScreenTracking ?? !1, e.debugLogging = t.debugLogging ?? !1, e.suppressWarnings = t.suppressWarnings ?? !1, e.buffer = new h(), e.circuitBreaker = new g(), e.context = R(t.appVersion, t.buildNumber), e.session = new m(), e.funnels = new w(), e.featureReach = new y(), e.errorReach = new E(), e.screenViewCooldowns = /* @__PURE__ */ new Map(), e.bufferFullWarned = !1, e.preConfigureWarned = !1, e.destroyed = !1, e.configured = !0, e.debug(
         `configured — env=${e.environment} endpoint=${e.endpoint} flush=${e.flushIntervalSeconds}s`
       ), e.enabled && (e.startNewSession(), e.startPeriodicFlush(), e.addVisibilityListener(), e.autoScreenTracking && e.setupAutoScreenTracking());
     } catch {
@@ -400,17 +417,20 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, E = 60, z = 1e4, M = 6e4, I 
       const n = e.normalizeName(t);
       if (!n) return;
       let s = r;
-      P.has(r) || (e.warn(
+      X.has(r) || (e.warn(
         `invalid error severity "${r}" — falling back to "${d}"`
       ), s = d);
-      const o = i !== void 0 ? e.normalizeField(i, u) : void 0;
-      e.session.recordActivity(), e.addEvent({
+      const c = i !== void 0 ? e.normalizeField(i, u) : void 0;
+      e.session.recordActivity();
+      const o = e.errorReach.firstOccurrence(n);
+      e.addEvent({
         type: "error",
         name: n,
         severity: s,
-        ...o ? { code: o } : {}
+        ...c ? { code: c } : {},
+        ...o ? { firstOccurrences: 1 } : {}
       }), e.debug(
-        `error — ${n} severity=${s}${o ? ` code=${o}` : ""}`
+        `error — ${n} severity=${s}${c ? ` code=${c}` : ""}${o ? " (first occurrence)" : ""}`
       ), e.checkFlushThreshold();
     } catch {
     }
@@ -433,7 +453,7 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, E = 60, z = 1e4, M = 6e4, I 
   static async destroy() {
     try {
       if (e.destroyed) return;
-      e.debug("destroying"), e.destroyed = !0, e.endCurrentSession(), await e.performFlush(!1), e.stopPeriodicFlush(), e.removeVisibilityListener(), e.teardownAutoScreenTracking(), e.screenViewCooldowns.clear(), e.funnels.clear(), e.featureReach.clear(), e.session.destroy(), e.configured = !1;
+      e.debug("destroying"), e.destroyed = !0, e.endCurrentSession(), await e.performFlush(!1), e.stopPeriodicFlush(), e.removeVisibilityListener(), e.teardownAutoScreenTracking(), e.screenViewCooldowns.clear(), e.funnels.clear(), e.featureReach.clear(), e.errorReach.clear(), e.session.destroy(), e.configured = !1;
     } catch {
     }
   }
@@ -480,7 +500,7 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, E = 60, z = 1e4, M = 6e4, I 
   }
   static endCurrentSession() {
     const t = e.session.end();
-    t && (e.funnels.clear(), e.featureReach.clear(), e.addEvent({
+    t && (e.funnels.clear(), e.featureReach.clear(), e.errorReach.clear(), e.addEvent({
       type: "session",
       name: "end",
       duration: t.duration,
@@ -502,7 +522,7 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, E = 60, z = 1e4, M = 6e4, I 
       for (const i of r) {
         e.debug(`flush — ${i.events.length} events`);
         try {
-          const n = await C(
+          const n = await O(
             e.endpoint,
             e.apiKey,
             i,
@@ -523,7 +543,7 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, E = 60, z = 1e4, M = 6e4, I 
    * batching boundaries move.
    */
   static splitToBodyLimit(t) {
-    if (e.payloadByteSize(t) <= O) return [t];
+    if (e.payloadByteSize(t) <= V) return [t];
     if (t.events.length <= 1)
       return e.warn("event dropped — serialized payload exceeds the request body size limit"), [];
     const r = Math.ceil(t.events.length / 2);
@@ -572,10 +592,10 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, E = 60, z = 1e4, M = 6e4, I 
       if (!e.canRecord()) return;
       const t = typeof window < "u" ? window.location.pathname : "/", r = e.pathToScreenName(t);
       if (!U.test(r)) return;
-      const n = (typeof window < "u" ? (window.location.hash ?? "").replace(/^#/, "") : "") || void 0, s = n ? `${r}|${n}` : r, o = Date.now(), c = e.screenViewCooldowns.get(s);
-      if (c !== void 0 && o - c < M)
+      const n = (typeof window < "u" ? (window.location.hash ?? "").replace(/^#/, "") : "") || void 0, s = n ? `${r}|${n}` : r, c = Date.now(), o = e.screenViewCooldowns.get(s);
+      if (o !== void 0 && c - o < M)
         return;
-      e.screenViewCooldowns.set(s, o), e.view(r, n);
+      e.screenViewCooldowns.set(s, c), e.view(r, n);
     } catch {
     }
   }
@@ -593,9 +613,9 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, E = 60, z = 1e4, M = 6e4, I 
   }
 };
 e.apiKey = "", e.endpoint = "", e.environment = "production", e.onError = () => {
-}, e.flushIntervalSeconds = E, e.autoScreenTracking = !1, e.debugLogging = !1, e.suppressWarnings = !1, e.enabled = !1, e.destroyed = !1, e.configured = !1, e.bufferFullWarned = !1, e.preConfigureWarned = !1, e.buffer = new h(), e.circuitBreaker = new g(), e.context = { platform: "web" }, e.session = new m(), e.funnels = new w(), e.featureReach = new y(), e.flushTimer = null, e.visibilityHandler = null, e.popstateHandler = null, e.hashchangeHandler = null, e.originalPushState = null, e.screenViewCooldowns = /* @__PURE__ */ new Map(), e.UUID_REGEX = /^[0-9a-f]{8}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{12}$/, e.LONG_HEX_REGEX = /[0-9a-f]{25,}/, e.LONG_NUMERIC_REGEX = /^[0-9]{13,}$/, e.ALL_HEX_REGEX = /^[0-9a-f]{17,}$/, e.EMBEDDED_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, e.LONG_NUMERIC_RE = /^\d{6,}$/, e.LONG_HEX_RE = /^[0-9a-f]{12,}$/i;
-let v = e;
+}, e.flushIntervalSeconds = v, e.autoScreenTracking = !1, e.debugLogging = !1, e.suppressWarnings = !1, e.enabled = !1, e.destroyed = !1, e.configured = !1, e.bufferFullWarned = !1, e.preConfigureWarned = !1, e.buffer = new h(), e.circuitBreaker = new g(), e.context = { platform: "web" }, e.session = new m(), e.funnels = new w(), e.featureReach = new y(), e.errorReach = new E(), e.flushTimer = null, e.visibilityHandler = null, e.popstateHandler = null, e.hashchangeHandler = null, e.originalPushState = null, e.screenViewCooldowns = /* @__PURE__ */ new Map(), e.UUID_REGEX = /^[0-9a-f]{8}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{12}$/, e.LONG_HEX_REGEX = /[0-9a-f]{25,}/, e.LONG_NUMERIC_REGEX = /^[0-9]{13,}$/, e.ALL_HEX_REGEX = /^[0-9a-f]{17,}$/, e.EMBEDDED_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, e.LONG_NUMERIC_RE = /^\d{6,}$/, e.LONG_HEX_RE = /^[0-9a-f]{12,}$/i;
+let S = e;
 export {
-  V as Severity,
-  v as Trackless
+  P as Severity,
+  S as Trackless
 };

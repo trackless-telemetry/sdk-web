@@ -53,6 +53,7 @@ export interface EventContext {
  * Type-specific fields:
  * - `count`: defaults to 1 if omitted. SDKs set count > 1 when client-side rollup collapses duplicates.
  * - `firstUses`: feature events only. Once-per-session first-use marker (1 <= firstUses <= count).
+ * - `firstOccurrences`: error events only. Once-per-session first-occurrence marker (1 <= firstOccurrences <= count).
  * - `detail`: optional detail value for view and feature events (e.g., view("product", "shoes")).
  * - `step` / `stepIndex`: funnel events only.
  * - `duration`: single performance measurement. Mutually exclusive with `durations`.
@@ -65,6 +66,7 @@ export interface TracklessEvent {
   name: string;
   count?: number;
   firstUses?: number;
+  firstOccurrences?: number;
   detail?: string;
   step?: string;
   stepIndex?: number;

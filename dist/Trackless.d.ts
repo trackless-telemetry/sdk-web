@@ -48,6 +48,8 @@ export declare class Trackless {
     private static funnels;
     /** Per-session first-use set backing feature-reach `firstUses` marking. Reset on session end. */
     private static featureReach;
+    /** Per-session first-occurrence set backing error-reach `firstOccurrences` marking. Reset on session end. */
+    private static errorReach;
     private static flushTimer;
     private static visibilityHandler;
     private static popstateHandler;

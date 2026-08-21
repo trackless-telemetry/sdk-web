@@ -11,6 +11,7 @@ import { EventBuffer } from "../src/eventBuffer.js";
 import { CircuitBreaker } from "../src/circuitBreaker.js";
 import { FunnelTracker } from "../src/funnel.js";
 import { FeatureReachTracker } from "../src/featureReach.js";
+import { ErrorReachTracker } from "../src/errorReach.js";
 import { SessionManager } from "../src/session.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -2007,5 +2008,266 @@ describe("Feature Reach — feature() first-use marking", () => {
       if (e.type !== "feature") expect(e.firstUses).toBeUndefined();
     }
     expect(events.find((e: any) => e.type === "feature").firstUses).toBe(1);
+  });
+});
+
+// ─── 24. Error Reach — ErrorReachTracker (3 tests) ───────────────────────────
+
+describe("ErrorReachTracker", () => {
+  it("marks the first occurrence true and repeats false", () => {
+    const tracker = new ErrorReachTracker();
+    expect(tracker.firstOccurrence("api_timeout")).toBe(true);
+    expect(tracker.firstOccurrence("api_timeout")).toBe(false);
+    expect(tracker.firstOccurrence("api_timeout")).toBe(false);
+  });
+
+  it("dedups distinct names independently", () => {
+    const tracker = new ErrorReachTracker();
+    expect(tracker.firstOccurrence("api_timeout")).toBe(true);
+    expect(tracker.firstOccurrence("parse_failed")).toBe(true);
+    expect(tracker.firstOccurrence("api_timeout")).toBe(false);
+    expect(tracker.firstOccurrence("parse_failed")).toBe(false);
+  });
+
+  it("clear() resets so the next occurrence counts as a first occurrence again", () => {
+    const tracker = new ErrorReachTracker();
+    expect(tracker.firstOccurrence("api_timeout")).toBe(true);
+    tracker.clear();
+    expect(tracker.firstOccurrence("api_timeout")).toBe(true);
+  });
+});
+
+// ─── 25. Error Reach — buffer rollup of firstOccurrences (4 tests) ────────────
+
+describe("Error Reach — buffer rollup", () => {
+  it("addCountable sums firstOccurrences across adds (cross-session-boundary rollup)", () => {
+    const buffer = new EventBuffer();
+    buffer.add({ type: "error", name: "x", severity: "error", firstOccurrences: 1 }); // session 1
+    buffer.add({ type: "error", name: "x", severity: "error", firstOccurrences: 1 }); // session 2, same key
+    buffer.add({ type: "error", name: "x", severity: "error" }); // repeat, no marker
+
+    const payloads = buffer.drain("production", { platform: "web" });
+    const event = payloads[0].events.find((e) => e.name === "x");
+    expect(event?.count).toBe(3);
+    expect(event?.firstOccurrences).toBe(2);
+  });
+
+  it("a different-severity entry carries no firstOccurrences (never 0)", () => {
+    const buffer = new EventBuffer();
+    buffer.add({ type: "error", name: "x", severity: "warning", firstOccurrences: 1 });
+    buffer.add({ type: "error", name: "x", severity: "fatal" }); // same name, separate key
+
+    const payloads = buffer.drain("production", { platform: "web" });
+    const events = payloads[0].events;
+    const warning = events.find((e) => e.severity === "warning");
+    const fatal = events.find((e) => e.severity === "fatal");
+    expect(warning?.firstOccurrences).toBe(1);
+    expect(fatal?.firstOccurrences).toBeUndefined();
+    expect("firstOccurrences" in (fatal as object)).toBe(false);
+  });
+
+  it("a repeat-only entry carries no firstOccurrences", () => {
+    const buffer = new EventBuffer();
+    // Name already seen earlier this session and flushed — later ones arrive unmarked.
+    buffer.add({ type: "error", name: "y", severity: "error" });
+    buffer.add({ type: "error", name: "y", severity: "error" });
+
+    const payloads = buffer.drain("production", { platform: "web" });
+    const event = payloads[0].events.find((e) => e.name === "y");
+    expect(event?.count).toBe(2);
+    expect(event?.firstOccurrences).toBeUndefined();
+  });
+
+  it("drain drops a non-positive firstOccurrences so it never reaches the wire", () => {
+    const buffer = new EventBuffer();
+    buffer.add({ type: "error", name: "z", severity: "error", firstOccurrences: 0 });
+
+    const payloads = buffer.drain("production", { platform: "web" });
+    const event = payloads[0].events.find((e) => e.name === "z");
+    expect(event?.firstOccurrences).toBeUndefined();
+    expect("firstOccurrences" in (event as object)).toBe(false);
+  });
+});
+
+// ─── 26. Error Reach — error() first-occurrence marking (8 tests) ─────────────
+
+describe("Error Reach — error() first-occurrence marking", () => {
+  function errorEvent(callIndex: number, name = "api_timeout"): any {
+    const body = JSON.parse(fetchSpy.mock.calls[callIndex][1].body);
+    return body.events.find((e: any) => e.type === "error" && e.name === name);
+  }
+
+  it("first error() carries firstOccurrences:1; a later repeat (separate flush) carries none", async () => {
+    configure();
+    await Trackless.flush(); // drain session:start
+    fetchSpy.mockClear();
+
+    Trackless.error("api_timeout"); // first occurrence
+    await Trackless.flush();
+    expect(errorEvent(0).firstOccurrences).toBe(1);
+    fetchSpy.mockClear();
+
+    Trackless.error("api_timeout"); // repeat, same session
+    await Trackless.flush();
+    expect(errorEvent(0).firstOccurrences).toBeUndefined();
+  });
+
+  it("repeats within a single flush roll up to count>1 with firstOccurrences:1", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.error("parse_failed");
+    Trackless.error("parse_failed");
+    Trackless.error("parse_failed");
+    await Trackless.flush();
+
+    const event = errorEvent(0, "parse_failed");
+    expect(event.count).toBe(3);
+    expect(event.firstOccurrences).toBe(1);
+    // Wire invariant: 1 <= firstOccurrences <= count
+    expect(event.firstOccurrences).toBeGreaterThanOrEqual(1);
+    expect(event.firstOccurrences).toBeLessThanOrEqual(event.count);
+  });
+
+  it("distinct error names dedup independently", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.error("alpha");
+    Trackless.error("beta");
+    Trackless.error("alpha"); // repeat
+    Trackless.error("beta"); // repeat
+    await Trackless.flush();
+
+    const events = JSON.parse(fetchSpy.mock.calls[0][1].body).events;
+    const alpha = events.find((e: any) => e.name === "alpha");
+    const beta = events.find((e: any) => e.name === "beta");
+    expect(alpha.count).toBe(2);
+    expect(alpha.firstOccurrences).toBe(1);
+    expect(beta.count).toBe(2);
+    expect(beta.firstOccurrences).toBe(1);
+  });
+
+  it("dedup runs on the normalized name (natural-string variants share one first occurrence)", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.error("API Timeout"); // normalizes to api_timeout → first occurrence
+    Trackless.error("api_timeout"); // same normalized name → repeat
+    await Trackless.flush();
+
+    const errors = JSON.parse(fetchSpy.mock.calls[0][1].body).events.filter(
+      (e: any) => e.type === "error",
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0].name).toBe("api_timeout");
+    expect(errors[0].count).toBe(2);
+    expect(errors[0].firstOccurrences).toBe(1);
+  });
+
+  it("reach dedup is by name only, not name+severity+code", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.error("upload", Severity.WARNING, "e1"); // first occurrence of "upload"
+    Trackless.error("upload", Severity.FATAL, "e2"); // same name, different severity/code
+    await Trackless.flush();
+
+    const events = JSON.parse(fetchSpy.mock.calls[0][1].body).events.filter(
+      (e: any) => e.type === "error" && e.name === "upload",
+    );
+    const warning = events.find((e: any) => e.severity === "warning");
+    const fatal = events.find((e: any) => e.severity === "fatal");
+    expect(warning.firstOccurrences).toBe(1);
+    expect(fatal.firstOccurrences).toBeUndefined();
+    // Reach summed across variants is exactly 1 for this session.
+    const total = events.reduce((s: number, e: any) => s + (e.firstOccurrences ?? 0), 0);
+    expect(total).toBe(1);
+  });
+
+  it("first-occurrence set survives a mid-session flush but re-marks after session end", async () => {
+    configure();
+    await Trackless.flush(); // drain session:start
+    fetchSpy.mockClear();
+
+    // Session 1: first occurrence → firstOccurrences:1
+    Trackless.error("api_timeout");
+    await Trackless.flush();
+    expect(errorEvent(0).firstOccurrences).toBe(1);
+    fetchSpy.mockClear();
+
+    // Still session 1 — the set survived the flush: repeat → no firstOccurrences
+    Trackless.error("api_timeout");
+    await Trackless.flush();
+    expect(errorEvent(0).firstOccurrences).toBeUndefined();
+
+    // End session 1 (tab hidden) then start session 2 (tab visible)
+    Object.defineProperty(document, "visibilityState", {
+      value: "hidden",
+      writable: true,
+      configurable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0); // let the keepalive flush settle
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      writable: true,
+      configurable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange")); // startNewSession
+    fetchSpy.mockClear();
+
+    // Session 2: first occurrence of the same error → firstOccurrences:1 again
+    Trackless.error("api_timeout");
+    await Trackless.flush();
+    expect(errorEvent(0).firstOccurrences).toBe(1);
+
+    // restore default visibility
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  it("configure() starts a fresh session so the same error is marked again", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.error("api_timeout");
+    await Trackless.flush();
+    expect(errorEvent(0).firstOccurrences).toBe(1);
+
+    configure(); // re-configure → new tracker, new session
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.error("api_timeout");
+    await Trackless.flush();
+    expect(errorEvent(0).firstOccurrences).toBe(1);
+  });
+
+  it("only error events ever carry firstOccurrences", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    Trackless.view("home");
+    Trackless.feature("export_clicked");
+    Trackless.funnel("checkout", 0, "cart");
+    Trackless.performance("api", 1.0);
+    Trackless.error("boom");
+    await Trackless.flush();
+
+    const events = JSON.parse(fetchSpy.mock.calls[0][1].body).events;
+    for (const e of events) {
+      if (e.type !== "error") expect(e.firstOccurrences).toBeUndefined();
+    }
+    expect(events.find((e: any) => e.type === "error").firstOccurrences).toBe(1);
   });
 });

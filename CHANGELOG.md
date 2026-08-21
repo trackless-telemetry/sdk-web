@@ -5,6 +5,12 @@ All notable changes to the Trackless Telemetry Web SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-21
+
+### Added
+
+- **Error session reach** — `error()` now marks the first occurrence of each error within a session by sending `firstOccurrences: 1` on that first event only, powering session-reach analytics (the share of sessions that hit an error at least once) in the dashboard. Mirrors the existing `firstUses` marker for features. Deduplication is by normalized error name only (not `name + severity + code`), so a session reporting one error at several severities counts once toward reach. The first-occurrence set is in-memory, resets on session end (like funnel and feature-reach state), and survives mid-session flushes; client-side rollup sums `firstOccurrences` per key. No code changes required and no new data is stored client-side.
+
 ## [0.3.0] - 2026-07-21
 
 ### Added
