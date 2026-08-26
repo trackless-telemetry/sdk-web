@@ -2271,3 +2271,102 @@ describe("Error Reach — error() first-occurrence marking", () => {
     expect(events.find((e: any) => e.type === "error").firstOccurrences).toBe(1);
   });
 });
+
+// ─── 27. Rejected Names Never Echo Raw Input (5 tests) ───────────────────────
+
+describe("Rejected Names Never Echo Raw Input", () => {
+  // A rejected name is raw, pre-normalization caller input. It reaches the
+  // warning *because* normalization failed, so no PII-stripped form of it
+  // exists — it must not be echoed to the console or handed to onError.
+  //
+  // Note on which inputs actually reach this path: PII stripping replaces a
+  // matched email/phone/SSN with the literal "[REDACTED]", which normalizes to
+  // the non-empty "redacted". A name containing a *recognized* email therefore
+  // always normalizes successfully and never reaches the rejection branch. The
+  // names that do reach it are the ones the PII guard does not recognize —
+  // most importantly non-Latin-script text, which includes personal names.
+  const REJECTED_NAME = "Ольга Иванова";
+  const EMAIL = "user@example.com";
+
+  it("the rejection warning does not contain the raw name", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    configure();
+
+    Trackless.feature(REJECTED_NAME);
+
+    const warns = warnSpy.mock.calls.map((c) => String(c[0]));
+    expect(warns.some((w) => w.includes("event name rejected"))).toBe(true);
+    expect(warns.some((w) => w.includes(REJECTED_NAME))).toBe(false);
+
+    warnSpy.mockRestore();
+  });
+
+  it("the onError message does not contain the raw name", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errors: Error[] = [];
+    configure({ onError: (e) => errors.push(e) });
+
+    Trackless.feature(REJECTED_NAME);
+
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+    expect(errors.some((e) => e.message.includes("Invalid event name"))).toBe(true);
+    expect(errors.some((e) => e.message.includes(REJECTED_NAME))).toBe(false);
+  });
+
+  it("every entry point that rejects a name keeps it out of warnings and errors", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errors: Error[] = [];
+    configure({ onError: (e) => errors.push(e) });
+
+    Trackless.view(REJECTED_NAME);
+    Trackless.feature(REJECTED_NAME);
+    Trackless.funnel(REJECTED_NAME, 0, REJECTED_NAME);
+    Trackless.performance(REJECTED_NAME, 1);
+    Trackless.error(REJECTED_NAME);
+
+    const emitted = [
+      ...warnSpy.mock.calls.map((c) => String(c[0])),
+      ...errors.map((e) => e.message),
+    ];
+    expect(emitted.length).toBeGreaterThanOrEqual(5);
+    expect(emitted.some((m) => m.includes(REJECTED_NAME))).toBe(false);
+
+    warnSpy.mockRestore();
+  });
+
+  it("an email in an accepted name is redacted before it reaches any log output", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors: Error[] = [];
+    configure({ debugLogging: true, onError: (e) => errors.push(e) });
+
+    Trackless.feature(`signup ${EMAIL}`, EMAIL);
+    Trackless.view(`profile ${EMAIL}`);
+
+    const emitted = [
+      ...warnSpy.mock.calls.map((c) => String(c[0])),
+      ...logSpy.mock.calls.map((c) => String(c[0])),
+      ...errors.map((e) => e.message),
+    ];
+    expect(emitted.length).toBeGreaterThanOrEqual(2);
+    for (const message of emitted) {
+      expect(message).not.toContain(EMAIL);
+      expect(message).not.toContain("@");
+    }
+
+    warnSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it("the rejection warning still respects suppressWarnings", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    configure({ suppressWarnings: true, onError: () => {} });
+
+    Trackless.feature(REJECTED_NAME);
+
+    const warns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("[Trackless]"));
+    expect(warns.length).toBe(0);
+
+    warnSpy.mockRestore();
+  });
+});

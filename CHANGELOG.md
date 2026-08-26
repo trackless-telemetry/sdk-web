@@ -5,6 +5,23 @@ All notable changes to the Trackless Telemetry Web SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-08-26
+
+### Added
+
+- **AGENTS.md** — a README for coding agents, following the [agents.md](https://agents.md) convention: the critical integration rules, the exact public API surface, naming and environment rules in brief, and a pointer to GUIDE.md as the authoritative guide. Shipped in the npm tarball alongside GUIDE.md and .cursorrules.
+- **Verification and troubleshooting documentation** — GUIDE.md gains a "Verify the Integration" section (the exact `[Trackless]` console signal strings an agent can check unattended, ending at `flush success — status=200`, plus the dashboard's "See your first feature data" checklist confirmation) and a troubleshooting table decoding the ingest endpoint's deliberately generic responses (401 wrong/regenerated key, 402 quota reached, 429 rate limit, 5xx/network with the circuit breaker's actual behavior — failed batches are not re-sent; backoff only pauses future flushes, 30s → 60m). AGENTS.md gains a matching compact "Verify" block.
+- **Anti-interpolation rule documented** — event fields must come from finite sets enumerable at write time; never interpolate runtime values (``feature(`export_${format}`)`` is the failure mode). Stated as a fourth critical rule in AGENTS.md and a subsection under GUIDE.md's event-naming rules, including the per-app daily cardinality budget that drops new `(type, name, detail)` tuples beyond it.
+- **.cursorrules completes the critical rules** — now states the no-wrapper rule and the detail-is-a-separate-argument rule alongside the existing guidance.
+
+### Changed
+
+- **`destroy()` guidance corrected** — entry-point (`main.ts`) setups need no `destroy()`; the cleanup advice applies only to effect-mounted setups (e.g., the Next.js app-router `useEffect` pattern), and `configure()` after `destroy()` re-initializes, so React 18 StrictMode double-mounts are safe. GUIDE.md's complete integration example now configures inline in `main.tsx` instead of through an `analytics.ts` indirection the no-wrapper rule prohibits. README now describes both Next.js routers accurately, shows `error()`'s severity default, and — with GUIDE.md and AGENTS.md — notes that the API key is obtained from the dashboard (shown once at creation) and that hardcoded `appVersion` examples must be replaced with the host app's real version.
+
+### Fixed
+
+- **Name-rejection warnings no longer echo raw caller input** — when an event name fails normalization, the console warning and the `Error` passed to `onError` now omit the name entirely and explain why it was rejected. Previously both carried the raw, pre-normalization string; the `onError` case is the more exposed of the two, since host apps routinely forward that callback to a crash reporter. No telemetry was ever affected: nothing here is buffered or transmitted, and PII stripping still runs before any event reaches the wire.
+
 ## [0.4.0] - 2026-08-21
 
 ### Added

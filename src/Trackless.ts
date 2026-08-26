@@ -27,6 +27,21 @@ export type {
 const EVENT_NAME_REGEX = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/;
 const EVENT_NAME_MAX_LENGTH = 100;
 
+/**
+ * Reason text for a name that fails normalization.
+ *
+ * The raw name is deliberately omitted. Normalization only fails *after* PII
+ * stripping has run, so no PII-stripped form of the name survives to report.
+ * The inputs that actually reach this branch are the ones the PII guard does
+ * *not* recognize — anything it does recognize is replaced with the literal
+ * "[REDACTED]", which normalizes to a non-empty "redacted" and is accepted.
+ * What is left is chiefly non-Latin-script text, which includes personal
+ * names. Emitting it would put that value in the browser console and — via
+ * `onError` — into whatever crash reporter the host app forwards errors to.
+ */
+const INVALID_EVENT_NAME_REASON =
+  "it normalized to an empty or disallowed value (raw name omitted: it may contain PII)";
+
 /** Default flush interval: 60 seconds */
 const DEFAULT_FLUSH_INTERVAL_SECONDS = 60;
 
@@ -472,8 +487,8 @@ export class Trackless {
   private static normalizeName(name: string): string | null {
     const normalized = Trackless.normalizeField(name, EVENT_NAME_MAX_LENGTH);
     if (!normalized) {
-      Trackless.warn(`event name rejected: "${name}"`);
-      Trackless.onError(new Error(`Invalid event name: ${name}`));
+      Trackless.warn(`event name rejected — ${INVALID_EVENT_NAME_REASON}`);
+      Trackless.onError(new Error(`Invalid event name — ${INVALID_EVENT_NAME_REASON}`));
       return null;
     }
     return normalized;

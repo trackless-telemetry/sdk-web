@@ -84,6 +84,11 @@ Trackless.configure({
 });
 ```
 
+**The API key is a human step.** It comes from the developer's Trackless dashboard
+(`dashboard.tracklesstelemetry.com`) and is shown once, at app creation. `tl_your_api_key_here` is
+a placeholder — ask the developer for the real key. Never fabricate a key or commit a placeholder
+as if it were real.
+
 ### Configuration Options
 
 | Option                 | Type                        | Default                                | Description                                                     |
@@ -128,6 +133,10 @@ Trackless.configure({
 
 createRoot(document.getElementById("root")!).render(<App />);
 ```
+
+The `appVersion: "1.2.0"` in these examples is a stand-in — pass the host app's real version
+(read it from your build metadata, e.g. a Vite define of `package.json`'s version), not the
+literal from this guide.
 
 ### Vue Example
 
@@ -397,6 +406,22 @@ Trackless.feature("distance_preset.1_mile");
 
 **Which types support grouping?** The `detail` parameter is supported on `feature` and `view` events. The dashboard's automatic donut-chart visualization applies to both.
 
+### Names Come From Finite Sets — Never Interpolate Runtime Values
+
+Every event field (`name`, `detail`, `step`, `code`) must come from a set you can enumerate at the call site. Never interpolate runtime values — user input, record IDs, URLs, dynamic format strings — into any of them:
+
+```typescript
+// WRONG — unbounded runtime value interpolated into the name
+Trackless.feature(`export_${format}`);
+Trackless.view(`product_${productId}`);
+
+// CORRECT — fixed names; detail only when its values are a closed set
+Trackless.feature("export", format); // only if format is a fixed set like "csv" | "json" | "pdf"
+Trackless.view("product");
+```
+
+This is enforced server-side: a per-app daily cardinality budget caps the number of distinct `(type, name, detail)` combinations. Once the budget is used up, events with **new** combinations are dropped for the rest of the day (already-seen names keep counting). An interpolated value burns the budget silently — moving it from `name` into `detail` does not help, because `detail` is part of the tuple. If a value is unbounded, map it to a small closed set before recording, or leave it out.
+
 ## 5. Session Lifecycle
 
 Sessions are managed automatically. No code needed.
@@ -426,38 +451,40 @@ if (Trackless.isConfigured) {
 }
 ```
 
-Call `destroy()` when your app unmounts (e.g., in a React `useEffect` cleanup or Vue `onUnmounted`):
+**Entry-point setups need no `destroy()`.** When `configure()` runs once at the app entry point (`main.ts` / `main.tsx` before mounting), there is nothing to clean up — the SDK flushes automatically on page hide and lives as long as the page. Do not add a `destroy()` call to these setups.
+
+`destroy()` exists for **effect-mounted** setups, where `configure()` runs inside a component effect that the framework can tear down and re-run — e.g., the Next.js app-router pattern in Section 2:
 
 ```typescript
-Trackless.destroy();
+useEffect(() => {
+  Trackless.configure({ ... });
+  return () => {
+    Trackless.destroy();
+  };
+}, []);
 ```
 
-This flushes remaining events and removes all listeners. After `destroy()`, the instance is permanently disabled (`isConfigured` returns `false`). Call `Trackless.configure()` again to re-initialize.
+`destroy()` flushes remaining events and removes all listeners, and `isConfigured` returns `false` afterwards. Calling `Trackless.configure()` again fully re-initializes the SDK, so React 18 StrictMode's development-mode double-mount (mount → cleanup → mount) is safe: the second `configure()` starts a fresh instance.
 
 ## 8. Complete Integration Example
 
 ### React App with All Event Types
 
 ```tsx
-// src/analytics.ts — configure once
+// src/main.tsx — configure inline at the entry point (no analytics.ts indirection; see Section 0)
 import { Trackless } from "@trackless-telemetry/sdk-web";
+import { createRoot } from "react-dom/client";
+import App from "./App";
 
-export function initAnalytics() {
-  Trackless.configure({
-    apiKey: import.meta.env.VITE_TRACKLESS_API_KEY,
-    environment: import.meta.env.DEV ? "sandbox" : "production",
-    appVersion: "2.1.0",
-    buildNumber: "142",
-    autoScreenTracking: true,
-  });
-}
-```
+Trackless.configure({
+  apiKey: import.meta.env.VITE_TRACKLESS_API_KEY,
+  environment: import.meta.env.DEV ? "sandbox" : "production",
+  appVersion: "2.1.0",
+  buildNumber: "142",
+  autoScreenTracking: true,
+});
 
-```tsx
-// src/main.tsx
-import { initAnalytics } from "./analytics";
-initAnalytics();
-// ... render app
+createRoot(document.getElementById("root")!).render(<App />);
 ```
 
 ```tsx
@@ -527,7 +554,7 @@ Trackless collects **no user identifiers** and stores **only aggregate counts**.
 - **No individual performance measurements stored** — durations are aggregated server-side into statistical digests (t-digest)
 - **PII auto-stripping** — email addresses, phone numbers, and SSN patterns are automatically stripped from all event fields before buffering
 
-The only context collected is: platform (`"web"`), OS version (major.minor from user agent), device class (phone/tablet/desktop from screen width heuristic), locale (from `navigator.language`), language (ISO 639-1 code from `navigator.language`, e.g., `"en"`), `sdkVersion` (e.g., `web/0.4.0`), and distribution channel (the page hostname, e.g., `"www.example.com"`). All are coarse, non-identifying dimensions.
+The only context collected is: platform (`"web"`), OS version (major.minor from user agent), device class (phone/tablet/desktop from screen width heuristic), locale (from `navigator.language`), language (ISO 639-1 code from `navigator.language`, e.g., `"en"`), `sdkVersion` (e.g., `web/0.4.1`), and distribution channel (the page hostname, e.g., `"www.example.com"`). All are coarse, non-identifying dimensions.
 
 ## 10. Environment Variables
 
@@ -545,4 +572,45 @@ For framework-specific env var configuration:
 VITE_TRACKLESS_API_KEY=tl_your_api_key_here
 ```
 
-**Never commit API keys to source control.** Add `.env` to `.gitignore`.
+**Never commit API keys to source control.** Add `.env` to `.gitignore`. The real key comes from the developer's Trackless dashboard (shown once at app creation) — ask for it rather than inventing a value.
+
+## 11. Verify the Integration
+
+An agent can verify the integration end-to-end without human help: enable debug logging, record one event, force a flush, and read the browser console.
+
+```typescript
+Trackless.configure({
+  apiKey: "...", // the real key, from the developer
+  environment: "sandbox",
+  debugLogging: true,
+});
+
+Trackless.feature("integration_test");
+await Trackless.flush();
+```
+
+All SDK log lines are prefixed `[Trackless]`. Look for these signals, in order:
+
+| Signal                                                                                       | Meaning                                              |
+| -------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `[Trackless] configured — env=sandbox endpoint=https://api.tracklesstelemetry.com flush=60s` | `configure()` ran                                    |
+| `[Trackless] feature — integration_test`                                                     | the event was recorded and buffered                  |
+| `[Trackless] flush — 1 events`                                                               | a batch is being sent                                |
+| `[Trackless] flush success — status=200`                                                     | the ingest endpoint accepted the batch — **success** |
+| `[Trackless] flush failed — status=...` or `[Trackless] flush rejected — status=...`         | the send failed — decode with Section 12             |
+
+Debug lines use `console.log` and appear only with `debugLogging: true`. Failure lines use `console.warn` and appear unless `suppressWarnings: true`.
+
+The human-visible confirmation: once the first event lands, the app's getting-started checklist in the Trackless dashboard marks **"See your first feature data"** as complete.
+
+## 12. Troubleshooting
+
+The ingest endpoint's error responses are deliberately generic on the wire — they never disclose which rule was broken, how close the app is to a limit, or anything about the plan. This table is the decoder for what the SDK logs.
+
+| Console signal                                                | What it means                                                                                                                                                                                                                                                                            | What to do                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `flush rejected — status=401`                                 | Wrong or regenerated API key. Keys are shown once at creation; regenerating a key invalidates the old one immediately.                                                                                                                                                                   | Get the current key from the dashboard and redeploy. Check the env var actually reaches the bundle.                                                                                                                                                          |
+| `flush rejected — status=402`                                 | The plan's monthly event quota is reached. The endpoint stops accepting events — nothing converts silently and nothing is billed as overage.                                                                                                                                             | Wait for the next billing period, or upgrade the plan in the dashboard.                                                                                                                                                                                      |
+| `flush rejected — status=429`                                 | Per-app rate limit. The SDK discards the batch without retrying (4xx never triggers the circuit breaker).                                                                                                                                                                                | Back off. Persistent 429s usually mean an event-volume bug — e.g., recording inside a render loop. The buffer's client-side rollup normally keeps request rates far below the limit.                                                                         |
+| `flush failed — status=5xx` or `flush failed — network error` | Server or network problem. The failed batch is **not** re-sent (its events are dropped); a circuit breaker pauses further flush attempts with backoff (30s → 1m → 5m → 15m → 60m), and a single success resets it. While it is open, flushes log `flush skipped — circuit breaker open`. | Nothing — subsequent events flush normally once the endpoint recovers.                                                                                                                                                                                       |
+| No request ever sent                                          | The network layer blocked it, or the SDK never ran.                                                                                                                                                                                                                                      | If the page sets a Content-Security-Policy, `connect-src` must allow `https://api.tracklesstelemetry.com` (or your custom endpoint). Check ad-blockers/privacy extensions. Confirm `configure()` ran (`Trackless.isConfigured`) and the buffer is not empty. |

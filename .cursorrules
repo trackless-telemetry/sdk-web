@@ -1,0 +1,32 @@
+# Trackless Web SDK — AI Integration Rules
+
+This package is `@trackless-telemetry/sdk-web`, a privacy-first web analytics SDK. See GUIDE.md in this directory for the complete integration guide.
+
+## Quick Reference
+
+1. Install: `npm install @trackless-telemetry/sdk-web`
+2. Configure once at app startup with just an API key:
+   ```typescript
+   import { Trackless } from "@trackless-telemetry/sdk-web";
+   Trackless.configure({ apiKey: "tl_your_api_key_here" });
+   ```
+3. Call typed event methods anywhere:
+   - `Trackless.view("home")` — page/screen views (optional detail: `Trackless.view("home", "pricing")`)
+   - `Trackless.feature("export_clicked")` — feature usage (optional detail: `Trackless.feature("theme", "dark")`)
+   - `Trackless.funnel("checkout", 0, "view_cart")` — multi-step flows
+   - `Trackless.performance("api_fetch", 0.342)` — durationSeconds in seconds (optional thresholdSeconds: `Trackless.performance("api_fetch", 0.342, 2.0)`)
+   - `Trackless.error("payment_failed", "error", "DECLINED")` — error tracking
+
+## Important Rules
+
+- Do NOT create a wrapper hook or service (`useAnalytics()`, `analytics.ts`, `TrackingService`) — `Trackless` is already a static singleton; import it and call it directly
+- `detail` is a SEPARATE argument, never concatenated into the name: `Trackless.feature("theme", "dark")`, not `Trackless.feature("theme_dark")` — the dashboard groups detail distributions per name
+- The endpoint defaults to `https://api.tracklesstelemetry.com` — do NOT require the user to provide it
+- Store the API key in an environment variable (e.g., `VITE_TRACKLESS_API_KEY`), never hardcode in committed source
+- Event names and fields (`detail`, `step`, `code`) are auto-normalized: lowercased, spaces/special chars replaced with `_`, trimmed, truncated to 100 chars. Developers can pass natural strings like `"Sign Up Button"` (becomes `"sign_up_button"`). Use the optional `detail` parameter on `feature()` and `view()` to distinguish variants — dashboard auto-groups features with detail values into donut charts
+- Performance duration is in **seconds**, not milliseconds
+- Entry-point `configure()` (main.ts) needs no `destroy()`; call `Trackless.destroy()` only in effect-mounted setups (e.g., Next.js app-router useEffect cleanup)
+- Zero client persistence: no cookies, localStorage, sessionStorage, or IndexedDB
+- PII patterns (emails, phone numbers, SSNs) are automatically stripped from all event fields before buffering
+- Sessions are managed automatically — no manual session handling needed
+- For SPA route tracking, use `autoScreenTracking: true` or integrate with your router
