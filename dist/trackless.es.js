@@ -87,29 +87,29 @@ class g {
     return this.consecutiveFailures;
   }
 }
-const b = "0.4.0", $ = {
-  version: b
+const $ = "0.4.1", R = {
+  version: $
 };
 function l() {
   return typeof navigator < "u" ? navigator : {};
 }
-function R(a, t) {
+function F(a, t) {
   return {
     platform: "web",
-    osVersion: F(),
-    deviceClass: A(),
-    region: L(),
+    osVersion: A(),
+    deviceClass: L(),
+    region: N(),
     language: D(),
-    browser: N(),
-    os: T(),
+    browser: T(),
+    os: C(),
     appVersion: a,
     buildNumber: t,
-    sdkVersion: `web/${$.version}`,
+    sdkVersion: `web/${R.version}`,
     distributionChannel: typeof window < "u" ? window.location.hostname : void 0
     // daysSinceInstall omitted — web has no install concept
   };
 }
-function F() {
+function A() {
   try {
     const a = l().userAgentData;
     if (a != null && a.platformVersion) {
@@ -140,7 +140,7 @@ function F() {
     return;
   }
 }
-function A() {
+function L() {
   try {
     if (typeof navigator > "u" || typeof window > "u")
       return;
@@ -150,7 +150,7 @@ function A() {
     return;
   }
 }
-function L() {
+function N() {
   var a, t;
   try {
     const r = ((a = navigator.languages) == null ? void 0 : a[0]) ?? navigator.language;
@@ -176,7 +176,7 @@ function D() {
     return;
   }
 }
-function N() {
+function T() {
   try {
     const a = l();
     if (a.webdriver) return "bot";
@@ -192,7 +192,7 @@ function N() {
     return "other";
   }
 }
-function T() {
+function C() {
   try {
     const a = l().userAgentData;
     if (a != null && a.platform) {
@@ -289,8 +289,8 @@ class E {
     this.seen.clear();
   }
 }
-const C = 1e4;
-async function O(a, t, r, i = C, n = !1) {
+const O = 1e4;
+async function U(a, t, r, i = O, n = !1) {
   const s = new AbortController(), c = setTimeout(() => s.abort(), i);
   try {
     const o = await fetch(a, {
@@ -314,13 +314,13 @@ async function O(a, t, r, i = C, n = !1) {
     throw clearTimeout(c), o;
   }
 }
-const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = 60, z = 1e4, M = 6e4, I = 100, H = "https://api.tracklesstelemetry.com", V = 50 * 1024, P = {
+const I = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = "it normalized to an empty or disallowed value (raw name omitted: it may contain PII)", S = 60, z = 1e4, M = 6e4, H = 100, V = "https://api.tracklesstelemetry.com", P = 50 * 1024, X = {
   DEBUG: "debug",
   INFO: "info",
   WARNING: "warning",
   ERROR: "error",
   FATAL: "fatal"
-}, X = new Set(Object.values(P)), d = "error", e = class e {
+}, x = new Set(Object.values(X)), d = "error", e = class e {
   /** Whether the SDK has been configured and is ready to record events. */
   static get isConfigured() {
     return e.configured && !e.destroyed;
@@ -328,8 +328,8 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = 60, z = 1e4, M = 6e4, I 
   /** Configure the SDK and start a new session. */
   static configure(t) {
     try {
-      e.apiKey = t.apiKey, e.endpoint = t.endpoint ?? H, e.environment = t.environment ?? "production", e.enabled = t.enabled ?? !0, e.onError = t.onError ?? (() => {
-      }), e.flushIntervalSeconds = t.flushIntervalSeconds ?? v, e.autoScreenTracking = t.autoScreenTracking ?? !1, e.debugLogging = t.debugLogging ?? !1, e.suppressWarnings = t.suppressWarnings ?? !1, e.buffer = new h(), e.circuitBreaker = new g(), e.context = R(t.appVersion, t.buildNumber), e.session = new m(), e.funnels = new w(), e.featureReach = new y(), e.errorReach = new E(), e.screenViewCooldowns = /* @__PURE__ */ new Map(), e.bufferFullWarned = !1, e.preConfigureWarned = !1, e.destroyed = !1, e.configured = !0, e.debug(
+      e.apiKey = t.apiKey, e.endpoint = t.endpoint ?? V, e.environment = t.environment ?? "production", e.enabled = t.enabled ?? !0, e.onError = t.onError ?? (() => {
+      }), e.flushIntervalSeconds = t.flushIntervalSeconds ?? S, e.autoScreenTracking = t.autoScreenTracking ?? !1, e.debugLogging = t.debugLogging ?? !1, e.suppressWarnings = t.suppressWarnings ?? !1, e.buffer = new h(), e.circuitBreaker = new g(), e.context = F(t.appVersion, t.buildNumber), e.session = new m(), e.funnels = new w(), e.featureReach = new y(), e.errorReach = new E(), e.screenViewCooldowns = /* @__PURE__ */ new Map(), e.bufferFullWarned = !1, e.preConfigureWarned = !1, e.destroyed = !1, e.configured = !0, e.debug(
         `configured — env=${e.environment} endpoint=${e.endpoint} flush=${e.flushIntervalSeconds}s`
       ), e.enabled && (e.startNewSession(), e.startPeriodicFlush(), e.addVisibilityListener(), e.autoScreenTracking && e.setupAutoScreenTracking());
     } catch {
@@ -417,7 +417,7 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = 60, z = 1e4, M = 6e4, I 
       const n = e.normalizeName(t);
       if (!n) return;
       let s = r;
-      X.has(r) || (e.warn(
+      x.has(r) || (e.warn(
         `invalid error severity "${r}" — falling back to "${d}"`
       ), s = d);
       const c = i !== void 0 ? e.normalizeField(i, u) : void 0;
@@ -493,7 +493,7 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = 60, z = 1e4, M = 6e4, I 
   }
   static normalizeName(t) {
     const r = e.normalizeField(t, u);
-    return r || (e.warn(`event name rejected: "${t}"`), e.onError(new Error(`Invalid event name: ${t}`)), null);
+    return r || (e.warn(`event name rejected — ${v}`), e.onError(new Error(`Invalid event name — ${v}`)), null);
   }
   static startNewSession() {
     e.session.start() && (e.addEvent({ type: "session", name: "start" }), e.debug("session started"));
@@ -508,7 +508,7 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = 60, z = 1e4, M = 6e4, I 
     }), e.debug(`session ended — duration=${t.duration}s depth=${t.depth}`));
   }
   static checkFlushThreshold() {
-    e.buffer.totalSize >= I && e.performFlush(!1).catch(() => {
+    e.buffer.totalSize >= H && e.performFlush(!1).catch(() => {
     });
   }
   static async performFlush(t) {
@@ -522,7 +522,7 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = 60, z = 1e4, M = 6e4, I 
       for (const i of r) {
         e.debug(`flush — ${i.events.length} events`);
         try {
-          const n = await O(
+          const n = await U(
             e.endpoint,
             e.apiKey,
             i,
@@ -543,7 +543,7 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = 60, z = 1e4, M = 6e4, I 
    * batching boundaries move.
    */
   static splitToBodyLimit(t) {
-    if (e.payloadByteSize(t) <= V) return [t];
+    if (e.payloadByteSize(t) <= P) return [t];
     if (t.events.length <= 1)
       return e.warn("event dropped — serialized payload exceeds the request body size limit"), [];
     const r = Math.ceil(t.events.length / 2);
@@ -591,7 +591,7 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = 60, z = 1e4, M = 6e4, I 
     try {
       if (!e.canRecord()) return;
       const t = typeof window < "u" ? window.location.pathname : "/", r = e.pathToScreenName(t);
-      if (!U.test(r)) return;
+      if (!I.test(r)) return;
       const n = (typeof window < "u" ? (window.location.hash ?? "").replace(/^#/, "") : "") || void 0, s = n ? `${r}|${n}` : r, c = Date.now(), o = e.screenViewCooldowns.get(s);
       if (o !== void 0 && c - o < M)
         return;
@@ -613,9 +613,9 @@ const U = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = 60, z = 1e4, M = 6e4, I 
   }
 };
 e.apiKey = "", e.endpoint = "", e.environment = "production", e.onError = () => {
-}, e.flushIntervalSeconds = v, e.autoScreenTracking = !1, e.debugLogging = !1, e.suppressWarnings = !1, e.enabled = !1, e.destroyed = !1, e.configured = !1, e.bufferFullWarned = !1, e.preConfigureWarned = !1, e.buffer = new h(), e.circuitBreaker = new g(), e.context = { platform: "web" }, e.session = new m(), e.funnels = new w(), e.featureReach = new y(), e.errorReach = new E(), e.flushTimer = null, e.visibilityHandler = null, e.popstateHandler = null, e.hashchangeHandler = null, e.originalPushState = null, e.screenViewCooldowns = /* @__PURE__ */ new Map(), e.UUID_REGEX = /^[0-9a-f]{8}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{12}$/, e.LONG_HEX_REGEX = /[0-9a-f]{25,}/, e.LONG_NUMERIC_REGEX = /^[0-9]{13,}$/, e.ALL_HEX_REGEX = /^[0-9a-f]{17,}$/, e.EMBEDDED_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, e.LONG_NUMERIC_RE = /^\d{6,}$/, e.LONG_HEX_RE = /^[0-9a-f]{12,}$/i;
-let S = e;
+}, e.flushIntervalSeconds = S, e.autoScreenTracking = !1, e.debugLogging = !1, e.suppressWarnings = !1, e.enabled = !1, e.destroyed = !1, e.configured = !1, e.bufferFullWarned = !1, e.preConfigureWarned = !1, e.buffer = new h(), e.circuitBreaker = new g(), e.context = { platform: "web" }, e.session = new m(), e.funnels = new w(), e.featureReach = new y(), e.errorReach = new E(), e.flushTimer = null, e.visibilityHandler = null, e.popstateHandler = null, e.hashchangeHandler = null, e.originalPushState = null, e.screenViewCooldowns = /* @__PURE__ */ new Map(), e.UUID_REGEX = /^[0-9a-f]{8}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{12}$/, e.LONG_HEX_REGEX = /[0-9a-f]{25,}/, e.LONG_NUMERIC_REGEX = /^[0-9]{13,}$/, e.ALL_HEX_REGEX = /^[0-9a-f]{17,}$/, e.EMBEDDED_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, e.LONG_NUMERIC_RE = /^\d{6,}$/, e.LONG_HEX_RE = /^[0-9a-f]{12,}$/i;
+let b = e;
 export {
-  P as Severity,
-  S as Trackless
+  X as Severity,
+  b as Trackless
 };
