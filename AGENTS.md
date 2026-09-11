@@ -82,8 +82,8 @@ lands, the dashboard's getting-started checklist marks **"See your first feature
 ## After release: the loop back to you
 
 Once the instrumented app ships, production usage accumulates in Trackless as aggregate counts
-only — no individual records, no identifiers. From the dashboard's Agent context view, the
-developer can copy or download a context pack — the counts for a chosen window and slice,
+only — no individual records, no identifiers. From the dashboard's Agent pack page, the
+developer can copy or download a pack — the counts for a chosen window and slice,
 together with instructions for reading them — and paste it into the agent they already use
 (likely you). Trackless itself never calls a model and never analyzes anything; interpreting the
 counts against the codebase is the customer's agent's job. Instrument names thoughtfully now and
