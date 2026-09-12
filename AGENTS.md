@@ -76,8 +76,8 @@ Configure with `debugLogging: true`, record one event, then `await Trackless.flu
 browser console for `[Trackless] flush success — status=200` — with
 `[Trackless] configured — env=...` and `[Trackless] feature — ...` confirming the earlier steps,
 and `[Trackless] flush failed/rejected — status=...` signalling a failure. GUIDE.md §11 carries
-the full recipe and §12 the troubleshooting decoder (401/402/429/5xx). When the first event
-lands, the dashboard's getting-started checklist marks **"See your first feature data"**.
+the full recipe and §12 the troubleshooting decoder (400/401/402/413/429/5xx). When the first
+event lands, the dashboard's getting-started checklist marks **"See your first feature data"**.
 
 ## After release: the loop back to you
 
