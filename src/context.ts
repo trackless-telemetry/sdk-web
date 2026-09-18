@@ -1,4 +1,4 @@
-import type { EventContext } from "./types.js";
+import type { Environment, EventContext } from "./types.js";
 import pkg from "../package.json" with { type: "json" };
 
 // navigator.userAgentData and navigator.webdriver are non-standard members
@@ -42,9 +42,52 @@ export function detectContext(appVersion?: string, buildNumber?: string): EventC
     appVersion,
     buildNumber,
     sdkVersion: `web/${pkg.version}`,
-    distributionChannel: typeof window !== "undefined" ? window.location.hostname : undefined,
-    // daysSinceInstall omitted — web has no install concept
+    // No install-age or distribution-channel field: the SDKs read no install
+    // metadata, and the page hostname is never sent.
   };
+}
+
+/** Four dotted-decimal octets, the first 127 (the 127.0.0.0/8 loopback block). */
+const LOOPBACK_IPV4 = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+
+/**
+ * Whether a page hostname names this machine: a loopback or reserved-local
+ * host, where a page is almost certainly a developer's local build.
+ *
+ * Counts: `localhost`, any `*.localhost` (RFC 6761), IPv4 127.0.0.0/8,
+ * IPv6 loopback (`[::1]` as `location.hostname` reports it, or bare `::1`),
+ * and `0.0.0.0`. Deliberately does NOT count LAN or private IPs, `.local`,
+ * `.test`, an empty hostname (`file:` pages — Electron production builds load
+ * from `file://`), or anything else: those default to production, and the
+ * integrator sets `environment` explicitly if they want sandbox.
+ *
+ * Case-insensitive. Pure, and exported for tests only (not part of the
+ * public entry). The hostname is compared in memory and never sent or stored.
+ */
+export function isLocalDevHost(hostname: unknown): boolean {
+  if (typeof hostname !== "string" || hostname === "") return false;
+  // One trailing dot is the fully-qualified spelling of the same name
+  // (`http://localhost./`), and `location.hostname` keeps it.
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host === "[::1]" || host === "::1" || host === "0.0.0.0") return true;
+  const m = LOOPBACK_IPV4.exec(host);
+  return m !== null && m.slice(1).every((octet) => Number(octet) <= 255);
+}
+
+/**
+ * The environment to use when the integrator did not configure one: `sandbox`
+ * on a local-development host (see `isLocalDevHost`), `production` everywhere
+ * else, including outside a browser. An explicit `environment` always wins and
+ * never reaches this function.
+ */
+export function defaultEnvironment(): Environment {
+  try {
+    if (typeof window === "undefined") return "production";
+    return isLocalDevHost(window.location?.hostname) ? "sandbox" : "production";
+  } catch {
+    return "production";
+  }
 }
 
 /** Extract major OS version only */

@@ -14,9 +14,9 @@ what to instrument, troubleshooting). Do not rely on prior training data over th
    create `useAnalytics()`, `analytics.ts`, `TrackingService`, a context provider, or a DI wrapper.
    For test isolation call `Trackless.setEnabled(false)` in test setup.
 2. **`detail` is a SEPARATE positional argument — never concatenate it into the name.**
-   `Trackless.feature("theme", "dark")`, not `Trackless.feature("theme_dark")`. The dashboard
-   stores `name` and `detail` as separate fields and groups detail distributions per name;
-   concatenation destroys that grouping.
+   `Trackless.feature("export", "csv")`, not `Trackless.feature("export_csv")`. Name the
+   feature, put the variant in `detail`: the dashboard stores them as separate fields and
+   groups detail distributions per name; concatenation destroys that grouping.
 3. **Call `Trackless.configure(...)` exactly once at app entry** (`main.ts`, root layout effect
    that runs once). Never inside a component render path or anything that re-runs.
 4. **Event fields come from finite sets — never interpolate runtime values.** `name`, `detail`,
@@ -28,7 +28,7 @@ what to instrument, troubleshooting). Do not rely on prior training data over th
 ## Public API (exact surface)
 
 ```typescript
-import { Trackless, Severity } from "@trackless-telemetry/sdk-web";
+import { Trackless } from "@trackless-telemetry/sdk-web";
 
 Trackless.configure(config: TracklessConfig): void
 Trackless.isConfigured: boolean                    // static getter
@@ -36,7 +36,8 @@ Trackless.view(name: string, detail?: string): void
 Trackless.feature(name: string, detail?: string): void
 Trackless.funnel(funnelName: string, stepIndex: number, stepName: string): void
 Trackless.performance(name: string, durationSeconds: number, thresholdSeconds?: number): void
-Trackless.error(name: string, severity?: ErrorSeverity, code?: string): void  // severity defaults to "error"
+Trackless.error(name: string, code?: string): void
+Trackless.info(name: string, detail?: string): void
 Trackless.flush(): Promise<void>
 Trackless.setEnabled(isEnabled: boolean): void
 Trackless.destroy(): Promise<void>
@@ -44,8 +45,25 @@ Trackless.destroy(): Promise<void>
 
 `TracklessConfig`: `{ apiKey: string; endpoint?; environment?; enabled?; onError?;
 autoScreenTracking?; flushIntervalSeconds?; appVersion?; buildNumber?; debugLogging?;
-suppressWarnings? }` — only `apiKey` is required. `ErrorSeverity` is
-`"debug" | "info" | "warning" | "error" | "fatal"` (the `Severity` const mirrors it at runtime).
+suppressWarnings? }` — only `apiKey` is required.
+
+## Errors and info
+
+- `error(name, code?)` — something went wrong. Counts toward errors per session and every alert.
+- `info(name, detail?)` — something worth counting that the user did not do and that did not go
+  wrong (a tier, a unit preference, a theme, a fallback path that fired). Never counts toward
+  errors and never triggers an alert.
+- Call `info()` **once per session** for a property you want a session split on, right after
+  `configure()`: `Trackless.info("tier", user.isPaid ? "paid" : "free")`. Each value's count
+  then equals the sessions that reported it. It counts **sessions, not people** — one person
+  across four sessions is four. Report configuration many sessions share, never anything about
+  the person.
+- **Never share a name between `error()` and `info()`.** One store, two levels, and the
+  session-reach marker dedups on the name alone.
+- `error(name, severity, code?)` still compiles: the `severity` parameter is deprecated, not
+  removed. `"error" | "warning" | "fatal"` are sent as `error`; `"info" | "debug"` as `info`.
+  Write `error(name, code)` and `info(name, detail)` in new code — the second argument of
+  `error()` is the code.
 
 ## Rules that keep integrations correct
 
@@ -59,8 +77,10 @@ suppressWarnings? }` — only `apiKey` is required. `ErrorSeverity` is
   lowercased, invalid characters replaced with `_`, trimmed, truncated to 100 chars. Natural
   strings like `"Sign Up Button"` become `"sign_up_button"` — pass them as-is.
 - `performance()` takes **seconds**, not milliseconds.
-- Environment: web defaults to `"production"`; pass `environment: "sandbox"` explicitly for
-  non-production builds (there is no auto-detection in the browser).
+- Environment: with none configured, web sends `"sandbox"` on `localhost`, `*.localhost`,
+  `127.x.x.x`, `[::1]` and `0.0.0.0`, and `"production"` everywhere else. An explicit value
+  always wins. Set `environment` explicitly for LAN IPs, `.local`/`.test` hosts, staging,
+  preview deploys and Electron / `file:` pages — those default to production.
 - Sessions are managed automatically — no manual session handling.
 - Entry-point `configure()` (`main.ts`) needs no matching `destroy()` — the SDK flushes on page
   hide. Call `Trackless.destroy()` only in effect-mounted setups (e.g., a Next.js app-router

@@ -25,11 +25,11 @@ function ExportButton() {
   return (
     <button
       onClick={() => {
-        Trackless.feature("export_clicked");
+        Trackless.feature("export", "csv");
         exportData();
       }}
     >
-      Export
+      Export CSV
     </button>
   );
 }
@@ -64,6 +64,10 @@ Trackless.view("settings_notifications");
 
 In `main.tsx`/`main.ts` before mounting, in a root-layout `useEffect`, or in `onMount` for Svelte. Never inside a component render path.
 
+### Only localhost defaults to sandbox — set `environment` for anything else
+
+With no `environment` in the config, the SDK sends `"sandbox"` when the page host is `localhost`, `*.localhost`, a `127.x.x.x` address, `[::1]` or `0.0.0.0`, and `"production"` everywhere else. LAN and private IPs, `.local` and `.test` hosts, staging, preview deploys, and Electron or other `file:` pages are **production** unless you pass `environment: "sandbox"`. An explicit value always wins. Tying it to the build (`import.meta.env.DEV ? "sandbox" : "production"`) covers all of these.
+
 ## 1. Install
 
 ```bash
@@ -91,19 +95,19 @@ as if it were real.
 
 ### Configuration Options
 
-| Option                 | Type                        | Default                                | Description                                                     |
-| ---------------------- | --------------------------- | -------------------------------------- | --------------------------------------------------------------- |
-| `apiKey`               | `string`                    | **required**                           | API key with `tl_` prefix                                       |
-| `endpoint`             | `string`                    | `"https://api.tracklesstelemetry.com"` | Ingest endpoint URL                                             |
-| `environment`          | `"sandbox" \| "production"` | `"production"`                         | Set to `"sandbox"` for development/staging                      |
-| `enabled`              | `boolean`                   | `true`                                 | Set `false` to disable all recording                            |
-| `appVersion`           | `string`                    | `undefined`                            | Your app's version (e.g., `"2.1.0"`)                            |
-| `buildNumber`          | `string`                    | `undefined`                            | Your app's build number (e.g., `"142"`)                         |
-| `autoScreenTracking`   | `boolean`                   | `false`                                | Auto-track SPA route changes and hash navigation as view events |
-| `onError`              | `(error: Error) => void`    | no-op                                  | Error callback for debugging                                    |
-| `flushIntervalSeconds` | `number`                    | `60`                                   | Flush interval in seconds                                       |
-| `debugLogging`         | `boolean`                   | `false`                                | Enable debug logging for happy-path events                      |
-| `suppressWarnings`     | `boolean`                   | `false`                                | Suppress warning and error logging to console                   |
+| Option                 | Type                        | Default                                                  | Description                                                                              |
+| ---------------------- | --------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `apiKey`               | `string`                    | **required**                                             | API key with `tl_` prefix                                                                |
+| `endpoint`             | `string`                    | `"https://api.tracklesstelemetry.com"`                   | Ingest endpoint URL                                                                      |
+| `environment`          | `"sandbox" \| "production"` | `"sandbox"` on localhost / loopback, else `"production"` | Set explicitly for staging, preview deploys, LAN IPs, `.local`/`.test` and `file:` pages |
+| `enabled`              | `boolean`                   | `true`                                                   | Set `false` to disable all recording                                                     |
+| `appVersion`           | `string`                    | `undefined`                                              | Your app's version (e.g., `"2.1.0"`)                                                     |
+| `buildNumber`          | `string`                    | `undefined`                                              | Your app's build number (e.g., `"142"`)                                                  |
+| `autoScreenTracking`   | `boolean`                   | `false`                                                  | Auto-track SPA route changes and hash navigation as view events                          |
+| `onError`              | `(error: Error) => void`    | no-op                                                    | Error callback for debugging                                                             |
+| `flushIntervalSeconds` | `number`                    | `60`                                                     | Flush interval in seconds                                                                |
+| `debugLogging`         | `boolean`                   | `false`                                                  | Enable debug logging for happy-path events                                               |
+| `suppressWarnings`     | `boolean`                   | `false`                                                  | Suppress warning and error logging to console                                            |
 
 `appVersion` and `buildNumber`, when set, must be 1–50 characters of letters, digits, `.`, `_`, and `-`, or ingest rejects every packet — pass `undefined` rather than `""` (`value || undefined`). See Section 12.
 
@@ -262,15 +266,16 @@ router.afterEach((to) => {
 Record when a user interacts with a feature. Use the optional `detail` parameter to distinguish variants:
 
 ```typescript
-Trackless.feature("export_clicked");
-Trackless.feature("dark_mode_toggled");
-Trackless.feature("photo-upload");
-Trackless.feature("settings", "notifications");
-
-// With detail to compare variants
+// Name the feature, put the variant in detail
+Trackless.feature("export", "csv");
+Trackless.feature("export", "pdf");
 Trackless.feature("share", "twitter");
 Trackless.feature("share", "email");
 Trackless.feature("sort", "price_low_to_high");
+
+// No variant to record? The detail is optional
+Trackless.feature("dark_mode_toggled");
+Trackless.feature("photo-upload");
 ```
 
 **When to use:** Button clicks, toggles, actions — any user-initiated feature interaction.
@@ -340,29 +345,64 @@ Trackless.performance("api_fetch_data", durationSeconds, thresholdSeconds);
 
 ### Errors
 
-Record application errors with severity and optional code. Use the exported `Severity` constants for type-safe severity values:
+Record something that went wrong, with an optional code:
 
 ```typescript
-import { Trackless, Severity } from "@trackless-telemetry/sdk-web";
+import { Trackless } from "@trackless-telemetry/sdk-web";
 
 // Basic error
-Trackless.error("payment_failed", Severity.ERROR);
+Trackless.error("payment_failed");
 
-// With error code
-Trackless.error("api_timeout", Severity.WARNING, "ETIMEDOUT");
-Trackless.error("validation_failed", Severity.INFO, "INVALID_EMAIL");
+// With error code — an HTTP status, an exception type, a backend error code
+Trackless.error("api_timeout", "ETIMEDOUT");
+Trackless.error("validation_failed", "INVALID_EMAIL");
 
 // In a catch block
 try {
   await submitOrder();
 } catch (e) {
-  Trackless.error("order_submission", Severity.ERROR, e instanceof Error ? e.name : "unknown");
+  Trackless.error("order_submission", e instanceof Error ? e.name : "unknown");
 }
 ```
 
-**Severity levels:** `Severity.DEBUG`, `Severity.INFO`, `Severity.WARNING`, `Severity.ERROR`, `Severity.FATAL` (or string literals `"debug"` | `"info"` | `"warning"` | `"error"` | `"fatal"`)
+**When to use:** Caught exceptions, failed API calls, validation errors — any error condition you want to trend. Every `error()` call counts toward errors per session and toward every alert.
 
-**When to use:** Caught exceptions, failed API calls, validation errors, any error condition you want to trend.
+### Info
+
+Record something worth counting that the user did not do and that did not go wrong:
+
+```typescript
+// Configuration this session is running under
+Trackless.info("tier", user.isPaid ? "paid" : "free");
+Trackless.info("units", settings.units); // "metric" | "imperial"
+
+// A path that fired without anything failing
+Trackless.info("offline_fallback");
+```
+
+An `info()` event never counts toward errors per session and never triggers an alert. It is the right home for a tier, a unit preference, a theme, a notification permission state, or a fallback path that fired — anything that would otherwise be filed under a feature the user never used, or an error that was not an error.
+
+**Call it once per session** for a property you want a session split on. Do it right after `configure()`, or the first time the value is known:
+
+```typescript
+Trackless.configure({ apiKey: import.meta.env.VITE_TRACKLESS_API_KEY });
+Trackless.info("tier", user.isPaid ? "paid" : "free");
+```
+
+Then each value's count equals the number of sessions that reported it — 3,100 sessions on `free`, 420 on `paid`. **It counts sessions, not people.** One person across four sessions is four. Report configuration many sessions share, never anything about the person.
+
+**Do not share a name between `error()` and `info()`.** They are stored in one place, distinguished only by level, and the session-reach marker dedups on the name alone — so a name used by both methods in one session is marked once and reads as two unrelated rows.
+
+#### Migrating from the `severity` parameter
+
+`error(name, severity, code?)` still compiles and still records — the parameter is deprecated, not removed, so no published call breaks. The SDK maps what you pass to one of two stored levels before the event is buffered:
+
+| Passed to `error()`               | Sent and stored as |
+| --------------------------------- | ------------------ |
+| `"error"`, `"warning"`, `"fatal"` | `error`            |
+| `"info"`, `"debug"`               | `info`             |
+
+Replace `error(name, Severity.WARNING, code)` with `error(name, code)`, and `error(name, Severity.INFO, value)` with `info(name, value)`. The second argument of `error()` is now the code: anything that is not one of the five severity strings is recorded as one.
 
 ## 4. Event Naming Rules
 
@@ -406,7 +446,7 @@ Trackless.feature("theme.light");
 Trackless.feature("distance_preset.1_mile");
 ```
 
-**Which types support grouping?** The `detail` parameter is supported on `feature` and `view` events. The dashboard's automatic donut-chart visualization applies to both.
+**Which types support grouping?** The `detail` parameter is supported on `feature` and `view` events, and `info()` takes the same shape (its `detail` values are grouped under the name the same way). The dashboard's automatic donut-chart visualization applies to all three.
 
 ### Names Come From Finite Sets — Never Interpolate Runtime Values
 
@@ -430,7 +470,7 @@ Sessions are managed automatically. No code needed.
 
 - **Start:** A session begins when `Trackless.configure()` is called, and a new session starts each time the page becomes visible again
 - **End:** A session ends when the page is hidden (`visibilitychange`) — the session-end event (with duration and depth) is flushed immediately
-- **Depth:** Every non-session event increments the session's depth counter (used for session depth analytics)
+- **Depth:** Session depth is **events per session**. Every non-session event increments it — views, features, funnel steps, performance measurements, errors and `info()` calls alike
 - **Duration:** Measured from session start to session end (used for session duration analytics)
 
 ## 6. Flush Behavior
@@ -486,12 +526,15 @@ Trackless.configure({
   autoScreenTracking: true,
 });
 
+// Once per session: the configuration this session is running under.
+Trackless.info("tier", currentUser.isPaid ? "paid" : "free");
+
 createRoot(document.getElementById("root")!).render(<App />);
 ```
 
 ```tsx
 // src/pages/Checkout.tsx
-import { Trackless, Severity } from "@trackless-telemetry/sdk-web";
+import { Trackless } from "@trackless-telemetry/sdk-web";
 
 export function Checkout() {
   const handleAddToCart = () => {
@@ -511,7 +554,7 @@ export function Checkout() {
       Trackless.performance("order_submission", (performance.now() - start) / 1000);
       Trackless.funnel("checkout", 3, "order_complete");
     } catch (e) {
-      Trackless.error("order_failed", Severity.ERROR, e instanceof Error ? e.name : "unknown");
+      Trackless.error("order_failed", e instanceof Error ? e.name : "unknown");
     }
   };
 
@@ -521,7 +564,7 @@ export function Checkout() {
 
 ```tsx
 // src/pages/Settings.tsx
-import { Trackless, Severity } from "@trackless-telemetry/sdk-web";
+import { Trackless } from "@trackless-telemetry/sdk-web";
 
 export function Settings() {
   const handleThemeChange = (theme: string) => {
@@ -535,7 +578,7 @@ export function Settings() {
       await exportData();
       Trackless.performance("data_export", (performance.now() - start) / 1000);
     } catch (e) {
-      Trackless.error("export_failed", Severity.ERROR);
+      Trackless.error("export_failed");
     }
   };
 
@@ -552,11 +595,11 @@ Trackless collects **no user identifiers** and stores **only aggregate counts**.
 - **No IP address processing by application code** — IP addresses are never read, parsed, stored, or used by the SDK or the Trackless backend. Region comes from `navigator.language`, not IP geolocation. (AWS infrastructure receives IP addresses for network routing and DDoS protection as part of standard cloud operations, but they are not used for analytics.)
 - **No cross-session linking** — all session state is in-memory only
 - **No data sent to third parties** — events go only to your configured endpoint
-- **No stack traces, crash logs, or error messages** — error tracking uses only developer-defined names, severity levels, and codes
+- **No stack traces, crash logs, or error messages** — error and info tracking uses only developer-defined names and codes
 - **No individual performance measurements stored** — durations are aggregated server-side into statistical digests (t-digest)
 - **PII auto-stripping** — email addresses, phone numbers, and SSN patterns are automatically stripped from all event fields before buffering
 
-The only context collected is: platform (`"web"`), OS version (major.minor from user agent), device class (phone/tablet/desktop from screen width heuristic), locale (from `navigator.language`), language (ISO 639-1 code from `navigator.language`, e.g., `"en"`), `sdkVersion` (e.g., `web/0.4.1`), and distribution channel (the page hostname, e.g., `"www.example.com"`). All are coarse, non-identifying dimensions.
+The only context collected is: platform (`"web"`), OS version (major.minor from user agent), device class (phone/tablet/desktop from screen width heuristic), locale (from `navigator.language`), language (ISO 639-1 code from `navigator.language`, e.g., `"en"`), and `sdkVersion` (e.g., `web/0.5.0`). All are coarse, non-identifying dimensions. The page hostname is read only to choose the default environment and is never sent.
 
 ## 10. Environment Variables
 

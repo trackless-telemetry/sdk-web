@@ -2,7 +2,7 @@ import type { TracklessConfig, EventContext, EventPayload } from "./types.js";
 import type { TracklessEvent, Environment, ErrorSeverity } from "./types.js";
 import { EventBuffer } from "./eventBuffer.js";
 import { CircuitBreaker } from "./circuitBreaker.js";
-import { detectContext } from "./context.js";
+import { defaultEnvironment, detectContext } from "./context.js";
 import { SessionManager } from "./session.js";
 import { FunnelTracker } from "./funnel.js";
 import { FeatureReachTracker } from "./featureReach.js";
@@ -75,23 +75,51 @@ const MAX_REQUEST_BODY_SIZE_BYTES = 50 * 1024;
  * });
  *
  * Trackless.view('home');
- * Trackless.feature('export_clicked');
+ * Trackless.feature('export', 'csv');
+ * Trackless.error('api_timeout', 'TIMEOUT_500');
+ * Trackless.info('tier', 'paid');
  * ```
  */
-/** Error severity constants for use with `Trackless.error()`. */
+/**
+ * Severity constants for the deprecated `severity` parameter on
+ * `Trackless.error()`.
+ *
+ * Kept exported so no published call breaks. New code needs neither: call
+ * `error(name, code?)` for something that went wrong and `info(name, detail?)`
+ * for something that did not.
+ */
 export const Severity = {
+  /** @deprecated Nothing reads `debug` — it is sent as `info`. Call `Trackless.info(name, detail?)`. */
   DEBUG: "debug",
+  /** @deprecated Call `Trackless.info(name, detail?)` instead of passing this to `error()`. */
   INFO: "info",
+  /** @deprecated Nothing reads `warning` — it is sent as `error`. Call `Trackless.error(name, code?)`. */
   WARNING: "warning",
+  /** The level `error()` sends. Passing it explicitly is redundant. */
   ERROR: "error",
+  /** @deprecated Nothing reads `fatal` — it is sent as `error`. Call `Trackless.error(name, code?)`. */
   FATAL: "fatal",
 } as const satisfies Record<string, ErrorSeverity>;
 
-/** Runtime set of severities accepted by the ingest endpoint (matches the ErrorSeverity union). */
+/**
+ * Runtime set of the five severities installed SDKs may send. Used only to tell
+ * a legacy `error(name, severity, code?)` call from an `error(name, code?)` one.
+ */
 const VALID_SEVERITIES: ReadonlySet<string> = new Set(Object.values(Severity));
 
-/** Default severity when `error()` is called without one (or with an invalid value). */
-const DEFAULT_ERROR_SEVERITY: ErrorSeverity = "error";
+/** The two levels this SDK sends, and the ingest endpoint stores. */
+type StoredSeverity = Extract<ErrorSeverity, "error" | "info">;
+
+/**
+ * Map a severity a caller passed to the one that goes on the wire. Mirrors
+ * `storedSeverity()` in `@trackless/shared-config`, which ingest applies on the
+ * write path — the SDK is zero-dependency, so the two lines live twice on
+ * purpose. `info` and `debug` become `info`; everything else, including a
+ * missing or unrecognized value, becomes `error`.
+ */
+function storedSeverity(sent: string | undefined): StoredSeverity {
+  return sent === "info" || sent === "debug" ? "info" : "error";
+}
 
 export class Trackless {
   private static apiKey: string = "";
@@ -141,7 +169,7 @@ export class Trackless {
     try {
       Trackless.apiKey = config.apiKey;
       Trackless.endpoint = config.endpoint ?? DEFAULT_ENDPOINT;
-      Trackless.environment = config.environment ?? "production";
+      Trackless.environment = config.environment ?? defaultEnvironment();
       Trackless.enabled = config.enabled ?? true;
       Trackless.onError = config.onError ?? (() => {});
       Trackless.flushIntervalSeconds =
@@ -294,42 +322,78 @@ export class Trackless {
     }
   }
 
-  /** Record an error event. */
-  static error(
+  /**
+   * Record an error event with an explicit severity.
+   *
+   * @deprecated The `severity` parameter is deprecated. Call
+   * `error(name, code?)` for something that went wrong and
+   * `info(name, detail?)` for something that did not. A severity of `info` or
+   * `debug` is sent as `info`; every other value is sent as `error`.
+   */
+  static error(name: string, severity: ErrorSeverity, code?: string): void;
+  /** Record an error event — something went wrong. */
+  static error(name: string, code?: string): void;
+  static error(name: string, severityOrCode?: string, code?: string): void {
+    // One positional slot, two meanings: a legacy call passes one of the five
+    // severity strings, a current one passes the code. Anything that is not a
+    // severity is the code, so `error("api_timeout", "TIMEOUT_500")` records
+    // the code rather than warning about an unknown severity.
+    const isSeverity = severityOrCode !== undefined && VALID_SEVERITIES.has(severityOrCode);
+    Trackless.recordErrorEvent(
+      name,
+      isSeverity ? storedSeverity(severityOrCode) : "error",
+      isSeverity ? code : (code ?? severityOrCode),
+    );
+  }
+
+  /**
+   * Record an info event — something worth counting that the user did not do
+   * and that did not go wrong.
+   *
+   * Counted separately from errors: an info event never contributes to errors
+   * per session and never triggers an alert. Report configuration many sessions
+   * share (a tier, a unit preference, a fallback path that fired), never
+   * anything about the person. Do not share a name between `error()` and
+   * `info()`.
+   */
+  static info(name: string, detail?: string): void {
+    Trackless.recordErrorEvent(name, "info", detail);
+  }
+
+  /**
+   * Shared path behind `error()` and `info()`: same normalization, PII guard,
+   * session-reach marker, depth increment and rollup key. `severity` is already
+   * mapped to one of the two stored levels, so the buffer's rollup key collapses
+   * one name reported at several legacy severities into a single entry.
+   */
+  private static recordErrorEvent(
     name: string,
-    severity: ErrorSeverity = DEFAULT_ERROR_SEVERITY,
-    code?: string,
+    severity: StoredSeverity,
+    code: string | undefined,
   ): void {
     try {
       if (!Trackless.canRecord()) return;
       const normalized = Trackless.normalizeName(name);
       if (!normalized) return;
 
-      let validSeverity = severity;
-      if (!VALID_SEVERITIES.has(severity)) {
-        Trackless.warn(
-          `invalid error severity "${severity}" — falling back to "${DEFAULT_ERROR_SEVERITY}"`,
-        );
-        validSeverity = DEFAULT_ERROR_SEVERITY;
-      }
-
       const normalizedCode =
         code !== undefined ? Trackless.normalizeField(code, EVENT_NAME_MAX_LENGTH) : undefined;
       Trackless.session.recordActivity();
-      // Mark the first occurrence of this error name within the session (reach
+      // Mark the first occurrence of this name within the session (reach
       // dedup). Keyed on the normalized name only — not name+severity+code — so
-      // a session reporting one error at several severities or codes contributes
-      // a single first occurrence.
+      // a session reporting one name at several codes contributes a single first
+      // occurrence. `error()` and `info()` share the tracker, which is why a
+      // name must not be shared between them.
       const isFirstOccurrence = Trackless.errorReach.firstOccurrence(normalized);
       Trackless.addEvent({
         type: "error",
         name: normalized,
-        severity: validSeverity,
+        severity,
         ...(normalizedCode ? { code: normalizedCode } : {}),
         ...(isFirstOccurrence ? { firstOccurrences: 1 } : {}),
       });
       Trackless.debug(
-        `error — ${normalized} severity=${validSeverity}${normalizedCode ? ` code=${normalizedCode}` : ""}${
+        `${severity} — ${normalized}${normalizedCode ? ` code=${normalizedCode}` : ""}${
           isFirstOccurrence ? " (first occurrence)" : ""
         }`,
       );

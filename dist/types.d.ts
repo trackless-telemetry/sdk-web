@@ -5,7 +5,12 @@ export interface TracklessConfig {
     apiKey: string;
     /** Ingest endpoint URL (default: https://api.tracklesstelemetry.com) */
     endpoint?: string;
-    /** Environment tag: 'sandbox' or 'production' (default: 'production') */
+    /**
+     * Environment tag: 'sandbox' or 'production'. When omitted: 'sandbox' on a
+     * localhost / loopback page (localhost, *.localhost, 127.x.x.x, [::1],
+     * 0.0.0.0), 'production' everywhere else. Set it explicitly for LAN IPs,
+     * .local/.test hosts, staging, preview deploys and Electron / file: pages.
+     */
     environment?: Environment;
     /** Enable/disable event recording (default: true) */
     enabled?: boolean;

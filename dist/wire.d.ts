@@ -16,7 +16,7 @@
  */
 export type EventType = "session" | "view" | "feature" | "funnel" | "performance" | "error";
 export type ErrorSeverity = "debug" | "info" | "warning" | "error" | "fatal";
-export type Platform = "ios" | "android" | "web";
+export type Platform = "ios" | "android" | "web" | "macos";
 export type DeviceClass = "phone" | "tablet" | "desktop" | "watch" | "tv" | "unknown";
 export type Browser = "chrome" | "safari" | "firefox" | "edge" | "bot" | "other";
 export type Os = "macos" | "windows" | "linux" | "android" | "ios" | "other";
@@ -35,8 +35,16 @@ export interface EventContext {
     os?: Os;
     /** SDK platform and version (e.g., "web/0.2.5", "ios/0.2.3") */
     sdkVersion?: string;
-    /** Distribution channel (e.g., "testflight", "app_store", "play_store", hostname for web) */
+    /**
+     * Sent only by SDK versions before 0.5.0 (the install source on native, the
+     * page hostname on web). Accepted and ignored at ingest; current SDKs never
+     * send it.
+     */
     distributionChannel?: string;
+    /**
+     * Sent only by native SDK versions before 0.5.0. Accepted and ignored at
+     * ingest; current SDKs never send it.
+     */
     daysSinceInstall?: number;
 }
 /**

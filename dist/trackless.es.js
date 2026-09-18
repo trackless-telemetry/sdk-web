@@ -1,4 +1,4 @@
-class h {
+class f {
   constructor(t = 1e3) {
     this.aggregated = /* @__PURE__ */ new Map(), this.individual = [], this.maxItems = t;
   }
@@ -63,8 +63,8 @@ class h {
     }
   }
 }
-const p = [3e4, 6e4, 3e5, 9e5, 36e5];
-class g {
+const h = [3e4, 6e4, 3e5, 9e5, 36e5];
+class p {
   constructor() {
     this.consecutiveFailures = 0, this.nextRetryAt = 0;
   }
@@ -79,39 +79,55 @@ class g {
   /** Record a flush failure — advances backoff schedule */
   recordFailure() {
     this.consecutiveFailures++;
-    const t = Math.min(this.consecutiveFailures - 1, p.length - 1);
-    this.nextRetryAt = Date.now() + p[t];
+    const t = Math.min(this.consecutiveFailures - 1, h.length - 1);
+    this.nextRetryAt = Date.now() + h[t];
   }
   /** Current consecutive failure count (for testing) */
   get failures() {
     return this.consecutiveFailures;
   }
 }
-const $ = "0.4.1", R = {
-  version: $
+const b = "0.5.0", $ = {
+  version: b
 };
-function l() {
+function d() {
   return typeof navigator < "u" ? navigator : {};
 }
-function F(a, t) {
+function A(a, t) {
   return {
     platform: "web",
-    osVersion: A(),
-    deviceClass: L(),
-    region: N(),
-    language: D(),
-    browser: T(),
-    os: C(),
+    osVersion: N(),
+    deviceClass: D(),
+    region: T(),
+    language: C(),
+    browser: I(),
+    os: O(),
     appVersion: a,
     buildNumber: t,
-    sdkVersion: `web/${R.version}`,
-    distributionChannel: typeof window < "u" ? window.location.hostname : void 0
-    // daysSinceInstall omitted — web has no install concept
+    sdkVersion: `web/${$.version}`
+    // No install-age or distribution-channel field: the SDKs read no install
+    // metadata, and the page hostname is never sent.
   };
 }
-function A() {
+const F = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+function R(a) {
+  if (typeof a != "string" || a === "") return !1;
+  const t = a.toLowerCase().replace(/\.$/, "");
+  if (t === "localhost" || t.endsWith(".localhost") || t === "[::1]" || t === "::1" || t === "0.0.0.0") return !0;
+  const r = F.exec(t);
+  return r !== null && r.slice(1).every((i) => Number(i) <= 255);
+}
+function L() {
+  var a;
   try {
-    const a = l().userAgentData;
+    return typeof window > "u" ? "production" : R((a = window.location) == null ? void 0 : a.hostname) ? "sandbox" : "production";
+  } catch {
+    return "production";
+  }
+}
+function N() {
+  try {
+    const a = d().userAgentData;
     if (a != null && a.platformVersion) {
       const s = a.platformVersion.split(".")[0];
       if (s) return s;
@@ -140,7 +156,7 @@ function A() {
     return;
   }
 }
-function L() {
+function D() {
   try {
     if (typeof navigator > "u" || typeof window > "u")
       return;
@@ -150,7 +166,7 @@ function L() {
     return;
   }
 }
-function N() {
+function T() {
   var a, t;
   try {
     const r = ((a = navigator.languages) == null ? void 0 : a[0]) ?? navigator.language;
@@ -163,7 +179,7 @@ function N() {
     return;
   }
 }
-function D() {
+function C() {
   var a;
   try {
     const t = ((a = navigator.languages) == null ? void 0 : a[0]) ?? navigator.language;
@@ -176,9 +192,9 @@ function D() {
     return;
   }
 }
-function T() {
+function I() {
   try {
-    const a = l();
+    const a = d();
     if (a.webdriver) return "bot";
     const t = a.userAgentData;
     if (t != null && t.brands) {
@@ -192,9 +208,9 @@ function T() {
     return "other";
   }
 }
-function C() {
+function O() {
   try {
-    const a = l().userAgentData;
+    const a = d().userAgentData;
     if (a != null && a.platform) {
       const r = a.platform.toLowerCase();
       return r === "macos" || r === "mac os x" ? "macos" : r === "windows" ? "windows" : r === "linux" || r.includes("cros") ? "linux" : r === "android" ? "android" : r === "ios" ? "ios" : "other";
@@ -205,7 +221,7 @@ function C() {
     return "other";
   }
 }
-class m {
+class g {
   constructor() {
     this.startTime = 0, this.depth = 0, this.active = !1;
   }
@@ -237,7 +253,7 @@ class m {
     this.active = !1;
   }
 }
-class w {
+class m {
   constructor() {
     this.funnels = /* @__PURE__ */ new Map();
   }
@@ -255,7 +271,7 @@ class w {
     this.funnels.clear();
   }
 }
-class y {
+class w {
   constructor() {
     this.seen = /* @__PURE__ */ new Set();
   }
@@ -289,8 +305,8 @@ class E {
     this.seen.clear();
   }
 }
-const O = 1e4;
-async function U(a, t, r, i = O, n = !1) {
+const U = 1e4;
+async function z(a, t, r, i = U, n = !1) {
   const s = new AbortController(), c = setTimeout(() => s.abort(), i);
   try {
     const o = await fetch(a, {
@@ -304,23 +320,32 @@ async function U(a, t, r, i = O, n = !1) {
       keepalive: n
     });
     clearTimeout(c);
-    let f;
+    let l;
     try {
-      f = await o.json();
+      l = await o.json();
     } catch {
     }
-    return { status: o.status, body: f };
+    return { status: o.status, body: l };
   } catch (o) {
     throw clearTimeout(c), o;
   }
 }
-const I = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = "it normalized to an empty or disallowed value (raw name omitted: it may contain PII)", S = 60, z = 1e4, M = 6e4, H = 100, V = "https://api.tracklesstelemetry.com", P = 50 * 1024, X = {
+const M = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, y = "it normalized to an empty or disallowed value (raw name omitted: it may contain PII)", v = 60, H = 1e4, V = 6e4, P = 100, x = "https://api.tracklesstelemetry.com", X = 50 * 1024, B = {
+  /** @deprecated Nothing reads `debug` — it is sent as `info`. Call `Trackless.info(name, detail?)`. */
   DEBUG: "debug",
+  /** @deprecated Call `Trackless.info(name, detail?)` instead of passing this to `error()`. */
   INFO: "info",
+  /** @deprecated Nothing reads `warning` — it is sent as `error`. Call `Trackless.error(name, code?)`. */
   WARNING: "warning",
+  /** The level `error()` sends. Passing it explicitly is redundant. */
   ERROR: "error",
+  /** @deprecated Nothing reads `fatal` — it is sent as `error`. Call `Trackless.error(name, code?)`. */
   FATAL: "fatal"
-}, x = new Set(Object.values(X)), d = "error", e = class e {
+}, G = new Set(Object.values(B));
+function W(a) {
+  return a === "info" || a === "debug" ? "info" : "error";
+}
+const e = class e {
   /** Whether the SDK has been configured and is ready to record events. */
   static get isConfigured() {
     return e.configured && !e.destroyed;
@@ -328,8 +353,8 @@ const I = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = "it normalized to an emp
   /** Configure the SDK and start a new session. */
   static configure(t) {
     try {
-      e.apiKey = t.apiKey, e.endpoint = t.endpoint ?? V, e.environment = t.environment ?? "production", e.enabled = t.enabled ?? !0, e.onError = t.onError ?? (() => {
-      }), e.flushIntervalSeconds = t.flushIntervalSeconds ?? S, e.autoScreenTracking = t.autoScreenTracking ?? !1, e.debugLogging = t.debugLogging ?? !1, e.suppressWarnings = t.suppressWarnings ?? !1, e.buffer = new h(), e.circuitBreaker = new g(), e.context = F(t.appVersion, t.buildNumber), e.session = new m(), e.funnels = new w(), e.featureReach = new y(), e.errorReach = new E(), e.screenViewCooldowns = /* @__PURE__ */ new Map(), e.bufferFullWarned = !1, e.preConfigureWarned = !1, e.destroyed = !1, e.configured = !0, e.debug(
+      e.apiKey = t.apiKey, e.endpoint = t.endpoint ?? x, e.environment = t.environment ?? L(), e.enabled = t.enabled ?? !0, e.onError = t.onError ?? (() => {
+      }), e.flushIntervalSeconds = t.flushIntervalSeconds ?? v, e.autoScreenTracking = t.autoScreenTracking ?? !1, e.debugLogging = t.debugLogging ?? !1, e.suppressWarnings = t.suppressWarnings ?? !1, e.buffer = new f(), e.circuitBreaker = new p(), e.context = A(t.appVersion, t.buildNumber), e.session = new g(), e.funnels = new m(), e.featureReach = new w(), e.errorReach = new E(), e.screenViewCooldowns = /* @__PURE__ */ new Map(), e.bufferFullWarned = !1, e.preConfigureWarned = !1, e.destroyed = !1, e.configured = !0, e.debug(
         `configured — env=${e.environment} endpoint=${e.endpoint} flush=${e.flushIntervalSeconds}s`
       ), e.enabled && (e.startNewSession(), e.startPeriodicFlush(), e.addVisibilityListener(), e.autoScreenTracking && e.setupAutoScreenTracking());
     } catch {
@@ -410,27 +435,49 @@ const I = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = "it normalized to an emp
     } catch {
     }
   }
-  /** Record an error event. */
-  static error(t, r = d, i) {
+  static error(t, r, i) {
+    const n = r !== void 0 && G.has(r);
+    e.recordErrorEvent(
+      t,
+      n ? W(r) : "error",
+      n ? i : i ?? r
+    );
+  }
+  /**
+   * Record an info event — something worth counting that the user did not do
+   * and that did not go wrong.
+   *
+   * Counted separately from errors: an info event never contributes to errors
+   * per session and never triggers an alert. Report configuration many sessions
+   * share (a tier, a unit preference, a fallback path that fired), never
+   * anything about the person. Do not share a name between `error()` and
+   * `info()`.
+   */
+  static info(t, r) {
+    e.recordErrorEvent(t, "info", r);
+  }
+  /**
+   * Shared path behind `error()` and `info()`: same normalization, PII guard,
+   * session-reach marker, depth increment and rollup key. `severity` is already
+   * mapped to one of the two stored levels, so the buffer's rollup key collapses
+   * one name reported at several legacy severities into a single entry.
+   */
+  static recordErrorEvent(t, r, i) {
     try {
       if (!e.canRecord()) return;
       const n = e.normalizeName(t);
       if (!n) return;
-      let s = r;
-      x.has(r) || (e.warn(
-        `invalid error severity "${r}" — falling back to "${d}"`
-      ), s = d);
-      const c = i !== void 0 ? e.normalizeField(i, u) : void 0;
+      const s = i !== void 0 ? e.normalizeField(i, u) : void 0;
       e.session.recordActivity();
-      const o = e.errorReach.firstOccurrence(n);
+      const c = e.errorReach.firstOccurrence(n);
       e.addEvent({
         type: "error",
         name: n,
-        severity: s,
-        ...c ? { code: c } : {},
-        ...o ? { firstOccurrences: 1 } : {}
+        severity: r,
+        ...s ? { code: s } : {},
+        ...c ? { firstOccurrences: 1 } : {}
       }), e.debug(
-        `error — ${n} severity=${s}${c ? ` code=${c}` : ""}${o ? " (first occurrence)" : ""}`
+        `${r} — ${n}${s ? ` code=${s}` : ""}${c ? " (first occurrence)" : ""}`
       ), e.checkFlushThreshold();
     } catch {
     }
@@ -493,7 +540,7 @@ const I = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = "it normalized to an emp
   }
   static normalizeName(t) {
     const r = e.normalizeField(t, u);
-    return r || (e.warn(`event name rejected — ${v}`), e.onError(new Error(`Invalid event name — ${v}`)), null);
+    return r || (e.warn(`event name rejected — ${y}`), e.onError(new Error(`Invalid event name — ${y}`)), null);
   }
   static startNewSession() {
     e.session.start() && (e.addEvent({ type: "session", name: "start" }), e.debug("session started"));
@@ -508,7 +555,7 @@ const I = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = "it normalized to an emp
     }), e.debug(`session ended — duration=${t.duration}s depth=${t.depth}`));
   }
   static checkFlushThreshold() {
-    e.buffer.totalSize >= H && e.performFlush(!1).catch(() => {
+    e.buffer.totalSize >= P && e.performFlush(!1).catch(() => {
     });
   }
   static async performFlush(t) {
@@ -522,11 +569,11 @@ const I = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = "it normalized to an emp
       for (const i of r) {
         e.debug(`flush — ${i.events.length} events`);
         try {
-          const n = await U(
+          const n = await z(
             e.endpoint,
             e.apiKey,
             i,
-            z,
+            H,
             t
           );
           n.status >= 500 ? (e.circuitBreaker.recordFailure(), e.warn(`flush failed — status=${n.status}`), e.onError(new Error(`Flush failed with status ${n.status}`))) : n.status >= 400 ? (e.warn(`flush rejected — status=${n.status}`), e.onError(new Error(`Flush rejected with status ${n.status}`))) : (e.circuitBreaker.recordSuccess(), e.debug(`flush success — status=${n.status}`));
@@ -543,7 +590,7 @@ const I = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = "it normalized to an emp
    * batching boundaries move.
    */
   static splitToBodyLimit(t) {
-    if (e.payloadByteSize(t) <= P) return [t];
+    if (e.payloadByteSize(t) <= X) return [t];
     if (t.events.length <= 1)
       return e.warn("event dropped — serialized payload exceeds the request body size limit"), [];
     const r = Math.ceil(t.events.length / 2);
@@ -591,9 +638,9 @@ const I = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = "it normalized to an emp
     try {
       if (!e.canRecord()) return;
       const t = typeof window < "u" ? window.location.pathname : "/", r = e.pathToScreenName(t);
-      if (!I.test(r)) return;
+      if (!M.test(r)) return;
       const n = (typeof window < "u" ? (window.location.hash ?? "").replace(/^#/, "") : "") || void 0, s = n ? `${r}|${n}` : r, c = Date.now(), o = e.screenViewCooldowns.get(s);
-      if (o !== void 0 && c - o < M)
+      if (o !== void 0 && c - o < V)
         return;
       e.screenViewCooldowns.set(s, c), e.view(r, n);
     } catch {
@@ -613,9 +660,9 @@ const I = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/, u = 100, v = "it normalized to an emp
   }
 };
 e.apiKey = "", e.endpoint = "", e.environment = "production", e.onError = () => {
-}, e.flushIntervalSeconds = S, e.autoScreenTracking = !1, e.debugLogging = !1, e.suppressWarnings = !1, e.enabled = !1, e.destroyed = !1, e.configured = !1, e.bufferFullWarned = !1, e.preConfigureWarned = !1, e.buffer = new h(), e.circuitBreaker = new g(), e.context = { platform: "web" }, e.session = new m(), e.funnels = new w(), e.featureReach = new y(), e.errorReach = new E(), e.flushTimer = null, e.visibilityHandler = null, e.popstateHandler = null, e.hashchangeHandler = null, e.originalPushState = null, e.screenViewCooldowns = /* @__PURE__ */ new Map(), e.UUID_REGEX = /^[0-9a-f]{8}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{12}$/, e.LONG_HEX_REGEX = /[0-9a-f]{25,}/, e.LONG_NUMERIC_REGEX = /^[0-9]{13,}$/, e.ALL_HEX_REGEX = /^[0-9a-f]{17,}$/, e.EMBEDDED_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, e.LONG_NUMERIC_RE = /^\d{6,}$/, e.LONG_HEX_RE = /^[0-9a-f]{12,}$/i;
-let b = e;
+}, e.flushIntervalSeconds = v, e.autoScreenTracking = !1, e.debugLogging = !1, e.suppressWarnings = !1, e.enabled = !1, e.destroyed = !1, e.configured = !1, e.bufferFullWarned = !1, e.preConfigureWarned = !1, e.buffer = new f(), e.circuitBreaker = new p(), e.context = { platform: "web" }, e.session = new g(), e.funnels = new m(), e.featureReach = new w(), e.errorReach = new E(), e.flushTimer = null, e.visibilityHandler = null, e.popstateHandler = null, e.hashchangeHandler = null, e.originalPushState = null, e.screenViewCooldowns = /* @__PURE__ */ new Map(), e.UUID_REGEX = /^[0-9a-f]{8}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{12}$/, e.LONG_HEX_REGEX = /[0-9a-f]{25,}/, e.LONG_NUMERIC_REGEX = /^[0-9]{13,}$/, e.ALL_HEX_REGEX = /^[0-9a-f]{17,}$/, e.EMBEDDED_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, e.LONG_NUMERIC_RE = /^\d{6,}$/, e.LONG_HEX_RE = /^[0-9a-f]{12,}$/i;
+let S = e;
 export {
-  X as Severity,
-  b as Trackless
+  B as Severity,
+  S as Trackless
 };

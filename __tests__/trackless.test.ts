@@ -1145,12 +1145,12 @@ describe("Typed Events", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("error() records error type with severity and code", async () => {
+  it("error() records error type with code and the stored severity", async () => {
     configure();
     await Trackless.flush();
     fetchSpy.mockClear();
 
-    Trackless.error("crash", "fatal", "E001");
+    Trackless.error("crash", "E001");
     await Trackless.flush();
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
@@ -1158,7 +1158,7 @@ describe("Typed Events", () => {
     expect(errEvent).toMatchObject({
       type: "error",
       name: "crash",
-      severity: "fatal",
+      severity: "error",
       code: "e001",
     });
   });
@@ -1695,17 +1695,30 @@ describe("Pre-Configure Warning", () => {
   });
 });
 
-// ─── 20. Error Severity Validation (5 tests) ─────────────────────────────────
+// ─── 20. Two Stored Levels: error() and info() (11 tests) ────────────────────
 
-describe("Error Severity Validation", () => {
-  it("Severity constants cover exactly the values accepted by the server", () => {
+describe("Two stored levels — error() and info()", () => {
+  /** Every error-type event on the wire from the one and only flushed request. */
+  function wireErrors(): any[] {
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    return body.events.filter((e: any) => e.type === "error");
+  }
+
+  async function freshlyConfigured(overrides: Partial<TracklessConfig> = {}): Promise<void> {
+    configure(overrides);
+    await Trackless.flush(); // drain session:start
+    fetchSpy.mockClear();
+  }
+
+  it("Severity constants still cover the five values installed SDKs may send", () => {
+    // The constants stay exported, and the ingest validator keeps accepting all
+    // five, so a published call that passes one does not break. Only the
+    // *stored* set narrowed to two.
     expect(Object.values(Severity).sort()).toEqual(["debug", "error", "fatal", "info", "warning"]);
   });
 
-  it("accepts all valid severity values unchanged", async () => {
-    configure();
-    await Trackless.flush();
-    fetchSpy.mockClear();
+  it("maps every legacy severity to one of the two stored levels", async () => {
+    await freshlyConfigured();
 
     Trackless.error("e_debug", "debug");
     Trackless.error("e_info", "info");
@@ -1714,60 +1727,136 @@ describe("Error Severity Validation", () => {
     Trackless.error("e_fatal", "fatal");
     await Trackless.flush();
 
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
-    const severities = body.events
-      .filter((e: any) => e.type === "error")
-      .map((e: any) => e.severity)
-      .sort();
-    expect(severities).toEqual(["debug", "error", "fatal", "info", "warning"]);
+    const byName = new Map(wireErrors().map((e) => [e.name, e.severity]));
+    expect(Object.fromEntries(byName)).toEqual({
+      e_debug: "info",
+      e_info: "info",
+      e_warning: "error",
+      e_error: "error",
+      e_fatal: "error",
+    });
   });
 
-  it("default severity is 'error' when omitted", async () => {
-    configure();
-    await Trackless.flush();
-    fetchSpy.mockClear();
+  it("sends 'error' when the severity is omitted", async () => {
+    await freshlyConfigured();
 
     Trackless.error("crash");
     await Trackless.flush();
 
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
-    const errEvent = body.events.find((e: any) => e.type === "error");
-    expect(errEvent.severity).toBe("error");
+    expect(wireErrors()[0].severity).toBe("error");
   });
 
-  it("invalid severity falls back to 'error' with a warning", async () => {
-    configure();
-    await Trackless.flush();
-    fetchSpy.mockClear();
+  it("treats a second argument that is not a severity as the code", async () => {
+    await freshlyConfigured();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    Trackless.error("crash", "catastrophic" as any);
+    Trackless.error("api_timeout", "TIMEOUT_500");
     await Trackless.flush();
 
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
-    const errEvent = body.events.find((e: any) => e.type === "error");
-    expect(errEvent.severity).toBe("error");
-
-    const sevWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("severity"));
-    expect(sevWarns.length).toBe(1);
+    expect(wireErrors()[0]).toMatchObject({
+      name: "api_timeout",
+      severity: "error",
+      code: "timeout_500",
+    });
+    // No severity complaint: there is no invalid severity any more, only a code.
+    expect(warnSpy.mock.calls.filter((c) => String(c[0]).includes("severity"))).toEqual([]);
     warnSpy.mockRestore();
   });
 
-  it("severity fallback warning respects suppressWarnings", async () => {
-    configure({ suppressWarnings: true });
+  it("mixed legacy severities for one name and code roll up to one entry", async () => {
+    await freshlyConfigured();
+
+    Trackless.error("payment_failed", "fatal", "DECLINED");
+    Trackless.error("payment_failed", "warning", "DECLINED");
+    Trackless.error("payment_failed", "error", "DECLINED");
     await Trackless.flush();
-    fetchSpy.mockClear();
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    Trackless.error("crash", "bogus" as any);
+    const errors = wireErrors();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      name: "payment_failed",
+      severity: "error",
+      code: "declined",
+      count: 3,
+      firstOccurrences: 1,
+    });
+  });
+
+  it("info() puts the detail on the wire as code with severity info", async () => {
+    await freshlyConfigured();
+
+    Trackless.info("tier", "paid");
     await Trackless.flush();
 
-    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
-    expect(body.events.find((e: any) => e.type === "error").severity).toBe("error");
+    expect(wireErrors()[0]).toMatchObject({
+      type: "error",
+      name: "tier",
+      severity: "info",
+      code: "paid",
+    });
+  });
 
-    const tracklessWarns = warnSpy.mock.calls.filter((c) => String(c[0]).includes("[Trackless]"));
-    expect(tracklessWarns.length).toBe(0);
-    warnSpy.mockRestore();
+  it("info() without a detail sends no code", async () => {
+    await freshlyConfigured();
+
+    Trackless.info("offline_fallback");
+    await Trackless.flush();
+
+    const event = wireErrors()[0];
+    expect(event).toMatchObject({ type: "error", name: "offline_fallback", severity: "info" });
+    expect(event.code).toBeUndefined();
+  });
+
+  it("info() and error() on the same name are two rows, one first occurrence", async () => {
+    await freshlyConfigured();
+
+    Trackless.error("tier"); // first occurrence of the shared name
+    Trackless.info("tier", "paid"); // same name, different stored level
+    await Trackless.flush();
+
+    const events = wireErrors().filter((e) => e.name === "tier");
+    expect(events).toHaveLength(2);
+    expect(events.find((e) => e.severity === "error").firstOccurrences).toBe(1);
+    expect(events.find((e) => e.severity === "info").firstOccurrences).toBeUndefined();
+  });
+
+  it("info() increments session depth like any other non-session event", async () => {
+    await freshlyConfigured();
+
+    Trackless.info("tier", "paid");
+    Trackless.info("units", "metric");
+    Trackless.info("tier", "paid");
+    await Trackless.destroy(); // ends the session and flushes the end event
+
+    const sessionEnd = fetchSpy.mock.calls
+      .flatMap((call: any) => JSON.parse(call[1].body).events)
+      .find((e: any) => e.type === "session" && e.name === "end");
+    // `stepIndex` on a session-end event carries the session's depth.
+    expect(sessionEnd.stepIndex).toBe(3);
+  });
+
+  it("marks the first occurrence of an info name once per session", async () => {
+    await freshlyConfigured();
+
+    Trackless.info("tier", "paid");
+    Trackless.info("tier", "paid");
+    await Trackless.flush();
+
+    const event = wireErrors()[0];
+    expect(event.count).toBe(2);
+    expect(event.firstOccurrences).toBe(1);
+  });
+
+  it("normalizes and PII-strips the info detail exactly like a code", async () => {
+    await freshlyConfigured();
+
+    Trackless.info("tier", "Paid Tier");
+    Trackless.info("contact", "user@example.com");
+    await Trackless.flush();
+
+    const byName = new Map(wireErrors().map((e) => [e.name, e.code]));
+    expect(byName.get("tier")).toBe("paid_tier");
+    expect(byName.get("contact")).toBe("redacted");
   });
 });
 
@@ -2168,22 +2257,22 @@ describe("Error Reach — error() first-occurrence marking", () => {
     expect(errors[0].firstOccurrences).toBe(1);
   });
 
-  it("reach dedup is by name only, not name+severity+code", async () => {
+  it("reach dedup is by name only, not name+code", async () => {
     configure();
     await Trackless.flush();
     fetchSpy.mockClear();
 
-    Trackless.error("upload", Severity.WARNING, "e1"); // first occurrence of "upload"
-    Trackless.error("upload", Severity.FATAL, "e2"); // same name, different severity/code
+    Trackless.error("upload", "e1"); // first occurrence of "upload"
+    Trackless.error("upload", "e2"); // same name, different code
     await Trackless.flush();
 
     const events = JSON.parse(fetchSpy.mock.calls[0][1].body).events.filter(
       (e: any) => e.type === "error" && e.name === "upload",
     );
-    const warning = events.find((e: any) => e.severity === "warning");
-    const fatal = events.find((e: any) => e.severity === "fatal");
-    expect(warning.firstOccurrences).toBe(1);
-    expect(fatal.firstOccurrences).toBeUndefined();
+    const first = events.find((e: any) => e.code === "e1");
+    const second = events.find((e: any) => e.code === "e2");
+    expect(first.firstOccurrences).toBe(1);
+    expect(second.firstOccurrences).toBeUndefined();
     // Reach summed across variants is exactly 1 for this session.
     const total = events.reduce((s: number, e: any) => s + (e.firstOccurrences ?? 0), 0);
     expect(total).toBe(1);

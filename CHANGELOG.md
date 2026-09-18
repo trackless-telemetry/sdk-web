@@ -5,6 +5,31 @@ All notable changes to the Trackless Telemetry Web SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-18
+
+### Added
+
+- **`info(name, detail?)`** — records something worth counting that the user did not do and that did not go wrong: a tier, a unit preference, a theme, a notification permission state, a fallback path that fired. It is sugar over the existing error path — same normalization, PII guard, session-reach marker, session-depth increment and client-side rollup — sent with severity `info` and the detail in `code`. An info event never counts toward errors per session and never triggers an alert. Called once per session, each value's count equals the number of sessions that reported it; it counts sessions, not people.
+- **`error(name, code?)`** — the documented error signature. The second argument is now the code, so `error("api_timeout", "TIMEOUT_500")` reads the way it looks.
+
+### Changed
+
+- **`environment` defaults to `sandbox` on localhost / loopback hosts when not configured.** With no `environment` in the config, a page served from `localhost`, any `*.localhost`, a `127.x.x.x` address, `[::1]` or `0.0.0.0` now sends `"sandbox"`; every other host still sends `"production"`. An explicit value always wins, including `"production"` on localhost. LAN and private IPs, `.local` and `.test` hosts, staging, preview deploys, and Electron or other `file:` pages are not treated as local — set `environment` explicitly there. The hostname is compared in memory only and never sent or stored.
+- **Two stored levels.** The SDK maps whatever severity a caller passes to one of two values before the event is buffered: `error`, `warning` and `fatal` are sent as `error`; `info` and `debug` are sent as `info`. Nothing downstream ever read `fatal` or `warning` differently from `error`, so the five levels bought a sort order and two donuts and cost developers their own error rate. The ingest endpoint applies the same mapping, so an older SDK build is handled identically. One consequence to expect: a name previously reported at several severities in one flush window now rolls up into a single buffered entry instead of one per level.
+- **The `severity` parameter on `error()` is deprecated** — marked `@deprecated` in the type declarations, not removed, so no published call breaks. The `Severity` constants stay exported, with `DEBUG`, `INFO`, `WARNING` and `FATAL` individually deprecated (`ERROR` and `INFO` are the two levels the wire still carries). Replace `error(name, Severity.WARNING, code)` with `error(name, code)`, and `error(name, Severity.INFO, value)` with `info(name, value)`.
+- **An unrecognized second argument is now the code, not an invalid severity.** `error()`'s runtime severity check (added in 0.3.0 for plain-JavaScript callers) is gone with the parameter it guarded: any second argument that is not one of the five severity strings is recorded as the code, and no warning is logged. `error(name, "TIMEOUT_500")` was previously a fallback-to-`error` plus a console warning; it now records `code: "timeout_500"`.
+
+### Removed
+
+- **`distributionChannel` (page hostname) is no longer sent.** It carried `window.location.hostname`, an open-ended value — every per-tenant subdomain, preview deployment and staging alias became its own dimension value. The SDK no longer includes it in the context; ingest accepts and discards it from older SDK builds.
+
+### Documentation
+
+- The five-level severity table is gone from README.md, GUIDE.md, AGENTS.md and .cursorrules, replaced by the two methods and a migration note carrying the mapping. New guidance: do not share a name between `error()` and `info()` — they share one store and one session-reach marker.
+- The feature example leads with `feature("export", "csv")` rather than `feature("export_clicked")`: name the feature, put the variant in `detail`. Names are permanent once data exists.
+- Session depth has one definition everywhere — **events per session**, incremented by every non-session event including `info()`.
+- The `distributionChannel` row and note are gone from README.md's context table, and GUIDE.md's collected-context sentence no longer lists it. The `EventContext` type documents `distributionChannel` and `daysSinceInstall` as sent only by SDK versions before 0.5.0 and discarded at ingest. README.md, GUIDE.md (§0 and the options table), AGENTS.md and .cursorrules describe the new `environment` default and the hosts it does not cover.
+
 ## [0.4.1] - 2026-08-26
 
 ### Added
