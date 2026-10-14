@@ -34,4 +34,5 @@ This package is `@trackless-telemetry/sdk-web`, a privacy-first web analytics SD
 - Zero client persistence: no cookies, localStorage, sessionStorage, or IndexedDB
 - PII patterns (emails, phone numbers, SSNs) are automatically stripped from all event fields before buffering
 - Sessions are managed automatically — no manual session handling needed
+- To change the API key at runtime (e.g., the user switches organization), call `configure()` again with the new key: the current session ends and its buffered events are sent under the previous key. A repeat call with identical settings is a no-op
 - For SPA route tracking, use `autoScreenTracking: true` or integrate with your router

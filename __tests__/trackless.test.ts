@@ -604,20 +604,22 @@ describe("Opt-out", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("setEnabled(true) resumes with empty buffer", async () => {
+  it("setEnabled(true) resumes with an empty buffer and a new session", async () => {
     configure();
     Trackless.feature("export_clicked");
     Trackless.setEnabled(false);
     Trackless.setEnabled(true);
-
-    // Buffer should be empty after re-enable
-    await Trackless.flush();
-    expect(fetchSpy).not.toHaveBeenCalled();
-
-    // New events should work
     Trackless.feature("new_event");
     await Trackless.flush();
+
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const events = JSON.parse(fetchSpy.mock.calls[0][1].body).events;
+    expect(events.filter((e: any) => e.type === "feature").map((e: any) => e.name)).toEqual([
+      "new_event",
+    ]);
+    expect(events.filter((e: any) => e.type === "session").map((e: any) => e.name)).toEqual([
+      "start",
+    ]);
   });
 });
 
@@ -1625,7 +1627,8 @@ describe("Buffer-Full Warning", () => {
       Trackless.feature(`item_${i}`);
     }
 
-    configure({ onError: () => {} }); // new session resets the once-per-session flag
+    // A changed setting starts a new session, which resets the once-per-session flag
+    configure({ onError: () => {}, apiKey: "tl_fedcba9876543210fedcba9876543210" });
     await openCircuitBreaker();
     for (let i = 0; i < 1005; i++) {
       Trackless.feature(`other_${i}`);
@@ -2332,7 +2335,7 @@ describe("Error Reach — error() first-occurrence marking", () => {
     await Trackless.flush();
     expect(errorEvent(0).firstOccurrences).toBe(1);
 
-    configure(); // re-configure → new tracker, new session
+    configure({ apiKey: "tl_fedcba9876543210fedcba9876543210" }); // changed key → new tracker, new session
     await Trackless.flush();
     fetchSpy.mockClear();
 
@@ -2457,5 +2460,253 @@ describe("Rejected Names Never Echo Raw Input", () => {
     expect(warns.length).toBe(0);
 
     warnSpy.mockRestore();
+  });
+});
+
+// ─── Reconfigure at runtime ──────────────────────────────────────────────────
+
+describe("Reconfigure", () => {
+  const KEY_A = TEST_API_KEY;
+  const KEY_B = "tl_fedcba9876543210fedcba9876543210";
+
+  /** Every request sent so far, as the key it carried and the events it held. */
+  function sent(): { key: string; events: any[]; environment: string }[] {
+    return fetchSpy.mock.calls.map((call) => {
+      const body = JSON.parse(call[1].body);
+      return {
+        key: call[1].headers["X-Api-Key"],
+        events: body.events,
+        environment: body.environment,
+      };
+    });
+  }
+
+  function eventsUnder(key: string): any[] {
+    return sent()
+      .filter((r) => r.key === key)
+      .flatMap((r) => r.events);
+  }
+
+  beforeEach(() => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/", hash: "" },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  it("sends events recorded before a key change under the old key and after it under the new key", async () => {
+    configure({ apiKey: KEY_A });
+    Trackless.feature("before_switch");
+
+    configure({ apiKey: KEY_B });
+    Trackless.feature("after_switch");
+    await Trackless.flush();
+
+    const underA = eventsUnder(KEY_A);
+    const underB = eventsUnder(KEY_B);
+    expect(underA.some((e) => e.name === "before_switch")).toBe(true);
+    expect(underA.some((e) => e.name === "after_switch")).toBe(false);
+    expect(underB.some((e) => e.name === "after_switch")).toBe(true);
+    expect(underB.some((e) => e.name === "before_switch")).toBe(false);
+  });
+
+  it("ends the old session under the old key and starts a new one under the new key", async () => {
+    configure({ apiKey: KEY_A });
+    Trackless.feature("x");
+
+    configure({ apiKey: KEY_B });
+    await Trackless.flush();
+
+    const underA = eventsUnder(KEY_A).filter((e) => e.type === "session");
+    const underB = eventsUnder(KEY_B).filter((e) => e.type === "session");
+    expect(underA.map((e) => e.name)).toEqual(["start", "end"]);
+    expect(underA[1].stepIndex).toBe(1); // depth of the ended session
+    expect(underB.map((e) => e.name)).toEqual(["start"]);
+  });
+
+  it("sends the retired buffer under the old environment and without keepalive", async () => {
+    configure({ apiKey: KEY_A, environment: "sandbox" });
+    Trackless.feature("x");
+
+    configure({ apiKey: KEY_B, environment: "production" });
+    await Trackless.flush();
+
+    const requests = sent();
+    expect(requests[0]).toMatchObject({ key: KEY_A, environment: "sandbox" });
+    expect(fetchSpy.mock.calls[0][1].keepalive).toBe(false);
+    expect(requests[1]).toMatchObject({ key: KEY_B, environment: "production" });
+  });
+
+  it("finishes a flush already in flight under the key it started with", async () => {
+    // Two events too large to share a request: one flush becomes two requests.
+    configure({ apiKey: KEY_A });
+    for (let i = 0; i < 4000; i++) {
+      Trackless.performance("load_a", 1000 + i + 0.123);
+      Trackless.performance("load_b", 1000 + i + 0.123);
+    }
+
+    let release: () => void = () => {};
+    fetchSpy.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({ status: 200, json: () => Promise.resolve({ accepted: 1, rejected: 0 }) });
+        }),
+    );
+    const inFlight = Trackless.flush();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    configure({ apiKey: KEY_B });
+    release();
+    await inFlight;
+
+    const perfRequests = sent().filter((r) => r.events.some((e) => e.type === "performance"));
+    expect(perfRequests.length).toBe(2);
+    expect(perfRequests.every((r) => r.key === KEY_A)).toBe(true);
+  });
+
+  it("keeps the current session when called again with identical settings", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    configure({ debugLogging: true });
+    Trackless.feature("x");
+
+    configure({ debugLogging: true });
+    Trackless.feature("x");
+    await Trackless.flush();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const events = sent()[0].events;
+    expect(events.filter((e) => e.type === "session").map((e) => e.name)).toEqual(["start"]);
+    expect(events.find((e) => e.type === "feature" && e.name === "x").count).toBe(2);
+    const logs = logSpy.mock.calls.map((c) => String(c[0]));
+    expect(logs).toContain(
+      "[Trackless] configure — settings unchanged, keeping the current session",
+    );
+    logSpy.mockRestore();
+  });
+
+  it("an identical repeat call replaces onError", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const first: Error[] = [];
+    const second: Error[] = [];
+    configure({ onError: (e) => first.push(e) });
+    configure({ onError: (e) => second.push(e) });
+
+    Trackless.feature("");
+
+    expect(first.length).toBe(0);
+    expect(second.length).toBe(1);
+  });
+
+  it("logs the reconfigure when a setting changes", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    configure({ debugLogging: true });
+    configure({ debugLogging: true, appVersion: "2.0.0" });
+
+    const logs = logSpy.mock.calls.map((c) => String(c[0]));
+    expect(logs).toContain(
+      "[Trackless] reconfigured — previous session ended and flushed under the previous settings",
+    );
+    logSpy.mockRestore();
+  });
+
+  it("a changed flushIntervalSeconds replaces the old timer", async () => {
+    configure({ flushIntervalSeconds: 1 });
+    configure({ flushIntervalSeconds: 100 });
+    await vi.advanceTimersByTimeAsync(0);
+    fetchSpy.mockClear();
+
+    Trackless.feature("x");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fetchSpy).not.toHaveBeenCalled(); // the 1 s timer is gone
+
+    await vi.advanceTimersByTimeAsync(99_000);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("turning autoScreenTracking off on reconfigure removes the listeners and the pushState hook", async () => {
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+    configure({ autoScreenTracking: true });
+    const hooked = history.pushState;
+
+    configure({ autoScreenTracking: false });
+    await vi.advanceTimersByTimeAsync(0);
+    fetchSpy.mockClear();
+
+    expect(history.pushState).not.toBe(hooked);
+    const removed = removeSpy.mock.calls.map((c) => c[0]);
+    expect(removed).toContain("popstate");
+    expect(removed).toContain("hashchange");
+
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/pricing", hash: "#plans" },
+      writable: true,
+      configurable: true,
+    });
+    window.dispatchEvent(new Event("popstate"));
+    window.dispatchEvent(new Event("hashchange"));
+    await Trackless.flush();
+
+    expect(
+      sent()
+        .flatMap((r) => r.events)
+        .some((e) => e.type === "view"),
+    ).toBe(false);
+  });
+
+  it("sends nothing from the old configuration while recording is disabled", async () => {
+    configure({ apiKey: KEY_A });
+    await Trackless.flush();
+    fetchSpy.mockClear();
+    Trackless.setEnabled(false);
+
+    configure({ apiKey: KEY_B });
+    await Trackless.flush();
+
+    expect(eventsUnder(KEY_A)).toEqual([]);
+    expect(eventsUnder(KEY_B).map((e) => e.name)).toEqual(["start"]);
+  });
+
+  it("configure() after destroy() starts fresh without ending anything", async () => {
+    configure({ apiKey: KEY_A });
+    await Trackless.destroy();
+    fetchSpy.mockClear();
+
+    configure({ apiKey: KEY_A });
+    await Trackless.flush();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(sent()[0].events.map((e) => e.name)).toEqual(["start"]);
+  });
+});
+
+describe("Opt-out with setEnabled", () => {
+  function sessionEvents(): any[] {
+    return fetchSpy.mock.calls
+      .flatMap((call) => JSON.parse(call[1].body).events)
+      .filter((e: any) => e.type === "session");
+  }
+
+  it("drops the session on setEnabled(false), so destroy() sends nothing", async () => {
+    configure();
+    Trackless.feature("before_opt_out");
+    Trackless.setEnabled(false);
+    await Trackless.destroy();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("starts a new session when recording is enabled again", async () => {
+    configure();
+    Trackless.feature("before_opt_out");
+    Trackless.setEnabled(false);
+    Trackless.setEnabled(true);
+    Trackless.feature("after_opt_in");
+    await Trackless.destroy();
+
+    const sessions = sessionEvents();
+    expect(sessions.map((e) => e.name)).toEqual(["start", "end"]);
+    expect(sessions[1].stepIndex).toBe(1); // only the event recorded after opting back in
   });
 });

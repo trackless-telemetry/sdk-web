@@ -64,6 +64,8 @@ Trackless.view("settings_notifications");
 
 In `main.tsx`/`main.ts` before mounting, in a root-layout `useEffect`, or in `onMount` for Svelte. Never inside a component render path.
 
+**Changing the API key at runtime** (for example, when the user switches organization): call `configure()` again with the new key. The current session ends and its buffered events are sent under the previous key, then a new session starts under the new one. A repeat call with identical settings is a no-op — it keeps the current session.
+
 ### Only localhost defaults to sandbox — set `environment` for anything else
 
 With no `environment` in the config, the SDK sends `"sandbox"` when the page host is `localhost`, `*.localhost`, a `127.x.x.x` address, `[::1]` or `0.0.0.0`, and `"production"` everywhere else. LAN and private IPs, `.local` and `.test` hosts, staging, preview deploys, and Electron or other `file:` pages are **production** unless you pass `environment: "sandbox"`. An explicit value always wins. Tying it to the build (`import.meta.env.DEV ? "sandbox" : "production"`) covers all of these.
@@ -468,8 +470,8 @@ This is enforced server-side: a per-app daily cardinality budget caps the number
 
 Sessions are managed automatically. No code needed.
 
-- **Start:** A session begins when `Trackless.configure()` is called, and a new session starts each time the page becomes visible again
-- **End:** A session ends when the page is hidden (`visibilitychange`) — the session-end event (with duration and depth) is flushed immediately
+- **Start:** A session begins when `Trackless.configure()` is called, and a new session starts each time the page becomes visible again. A repeat `configure()` with identical settings keeps the current session
+- **End:** A session ends when the page is hidden (`visibilitychange`) — the session-end event (with duration and depth) is flushed immediately. It also ends when `configure()` is called again with any changed setting, such as a new API key; its buffered events are then sent under the previous key, endpoint and environment
 - **Depth:** Session depth is **events per session**. Every non-session event increments it — views, features, funnel steps, performance measurements, errors and `info()` calls alike
 - **Duration:** Measured from session start to session end (used for session duration analytics)
 
@@ -492,6 +494,15 @@ if (Trackless.isConfigured) {
   Trackless.feature("shared_action");
 }
 ```
+
+To honor a user's analytics preference, toggle recording at runtime:
+
+```typescript
+Trackless.setEnabled(false); // Discards buffer and session, stops timers
+Trackless.setEnabled(true); // Resumes with a new session
+```
+
+Turning recording off sends nothing afterwards: the open session is dropped without its end, so a later page hide or `destroy()` has nothing to send. The SDK does not remember the choice — store it yourself and pass it as `enabled` to `configure()` on each page load.
 
 **Entry-point setups need no `destroy()`.** When `configure()` runs once at the app entry point (`main.ts` / `main.tsx` before mounting), there is nothing to clean up — the SDK flushes automatically on page hide and lives as long as the page. Do not add a `destroy()` call to these setups.
 
@@ -599,7 +610,7 @@ Trackless collects **no user identifiers** and stores **only aggregate counts**.
 - **No individual performance measurements stored** — durations are aggregated server-side into statistical digests (t-digest)
 - **PII auto-stripping** — email addresses, phone numbers, and SSN patterns are automatically stripped from all event fields before buffering
 
-The only context collected is: platform (`"web"`), OS version (major.minor from user agent), device class (phone/tablet/desktop from screen width heuristic), locale (from `navigator.language`), language (ISO 639-1 code from `navigator.language`, e.g., `"en"`), and `sdkVersion` (e.g., `web/0.5.0`). All are coarse, non-identifying dimensions. The page hostname is read only to choose the default environment and is never sent.
+The only context collected is: platform (`"web"`), OS version (major.minor from user agent), device class (phone/tablet/desktop from screen width heuristic), locale (from `navigator.language`), language (ISO 639-1 code from `navigator.language`, e.g., `"en"`), and `sdkVersion` (e.g., `web/0.5.1`). All are coarse, non-identifying dimensions. The page hostname is read only to choose the default environment and is never sent.
 
 ## 10. Environment Variables
 

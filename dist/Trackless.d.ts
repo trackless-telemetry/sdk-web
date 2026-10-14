@@ -48,6 +48,9 @@ export declare class Trackless {
     private static autoScreenTracking;
     private static debugLogging;
     private static suppressWarnings;
+    /** Raw `appVersion` / `buildNumber` as configured, kept to compare repeat `configure()` calls. */
+    private static appVersion;
+    private static buildNumber;
     private static enabled;
     private static destroyed;
     private static configured;
@@ -73,7 +76,16 @@ export declare class Trackless {
     private static screenViewCooldowns;
     /** Whether the SDK has been configured and is ready to record events. */
     static get isConfigured(): boolean;
-    /** Configure the SDK and start a new session. */
+    /**
+     * Configure the SDK and start a new session.
+     *
+     * Safe to call again at runtime, for example to switch API key when the user
+     * changes organization. A repeat call whose settings all match the running
+     * configuration keeps the current session and buffer and only replaces
+     * `onError`. A call that changes any setting ends the current session, sends
+     * its buffered events under the previous key, endpoint and environment, and
+     * then starts fresh exactly as a first call does.
+     */
     static configure(config: TracklessConfig): void;
     /** Record a view event. */
     static view(name: string, detail?: string): void;
@@ -114,10 +126,38 @@ export declare class Trackless {
     private static recordErrorEvent;
     /** Force flush pending events to the ingest endpoint. */
     static flush(): Promise<void>;
-    /** Toggle event recording. Disabling discards buffered data. */
+    /**
+     * Toggle event recording. Disabling discards buffered data and drops the
+     * session without sending its end; enabling again starts a new session.
+     */
     static setEnabled(isEnabled: boolean): void;
-    /** Flush remaining events and clean up. Permanently disables the instance. */
+    /** End the session, flush remaining events and clean up. Events are dropped until `configure()` is called again. */
     static destroy(): Promise<void>;
+    /**
+     * Whether `settings` match the running configuration. `enabled` is compared
+     * with the live state, so a configure() after `setEnabled(false)` that asks
+     * for recording is a change, not a no-op.
+     */
+    private static matchesRunningSettings;
+    /**
+     * Wind down the running configuration before a changed `configure()` applies.
+     *
+     * While recording is enabled, the current session's end goes into the
+     * current buffer and that buffer is flushed under the current key, endpoint,
+     * environment, context and circuit breaker. The flush is not awaited —
+     * `configure()` stays synchronous — and it drains the buffer before its first
+     * await, so nothing recorded under the new settings can join it. It runs
+     * without `keepalive`: the page is still alive, and keepalive's 64 KB
+     * in-flight quota is reserved for the page-hide flush. While recording is
+     * disabled, nothing is sent: `setEnabled(false)` already discarded the
+     * buffer and dropped the session.
+     *
+     * The flush timer, visibility listener and auto screen tracking are torn
+     * down so the new configuration installs its own.
+     */
+    private static retireRunningConfiguration;
+    /** The running configuration's buffer and send settings, captured now. */
+    private static currentFlushTarget;
     private static canRecord;
     /**
      * Normalize an event field (name, detail, step, code) into a valid format.
@@ -151,6 +191,13 @@ export declare class Trackless {
     private static startNewSession;
     private static endCurrentSession;
     private static checkFlushThreshold;
+    /**
+     * Drain `target`'s buffer and send it. `target` defaults to the running
+     * configuration, captured when the flush starts; every payload of this flush
+     * goes out under that capture even if `configure()` changes the key while
+     * an earlier payload is in flight. `keepalive` is set only by the page-hide
+     * flush, so the request can outlive the page.
+     */
     private static performFlush;
     /**
      * Split a payload into payloads whose serialized size fits the ingest

@@ -18,7 +18,10 @@ what to instrument, troubleshooting). Do not rely on prior training data over th
    feature, put the variant in `detail`: the dashboard stores them as separate fields and
    groups detail distributions per name; concatenation destroys that grouping.
 3. **Call `Trackless.configure(...)` exactly once at app entry** (`main.ts`, root layout effect
-   that runs once). Never inside a component render path or anything that re-runs.
+   that runs once). Never inside a component render path or anything that re-runs. To change
+   the API key at runtime (the user switches organization), call `configure()` again with the
+   new key: the current session ends and its buffered events are sent under the previous key.
+   A repeat call with identical settings is a no-op.
 4. **Event fields come from finite sets — never interpolate runtime values.** `name`, `detail`,
    `step`, and `code` must be enumerable at write time. Never build them from user input, IDs,
    URLs, or dynamic formats — ``Trackless.feature(`export_${format}`)`` with an unbounded

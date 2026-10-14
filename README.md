@@ -57,6 +57,8 @@ Trackless.view("settings_notifications");
 
 In your app's entry point (e.g., `main.ts` or `App.tsx` top level). For Next.js: `pages/_app.tsx` with the pages router, or a client component mounted once from `app/layout.tsx` with the app router (see GUIDE.md). Never inside component bodies or effects that re-run.
 
+**Changing the API key at runtime** (for example, when the user switches organization): call `configure()` again with the new key. The current session ends and its buffered events are sent under the previous key, then a new session starts under the new one. A repeat call with identical settings is a no-op — it keeps the current session.
+
 ## Requirements
 
 - Any modern browser supporting ES2020+ (Chrome 80+, Firefox 80+, Safari 14+, Edge 80+)
@@ -154,11 +156,11 @@ All methods are static, non-blocking, non-throwing, and safe to call from any co
 ```typescript
 Trackless.isConfigured; // Check if SDK is ready (boolean property)
 
-Trackless.setEnabled(false); // Stop recording, discard buffer
-Trackless.setEnabled(true); // Resume recording
+Trackless.setEnabled(false); // Stop recording, discard buffer and session
+Trackless.setEnabled(true); // Resume recording in a new session
 
 await Trackless.flush(); // Force-send buffered events
-await Trackless.destroy(); // Flush and permanently disable
+await Trackless.destroy(); // End the session, send what is left, stop until configure()
 ```
 
 ## Errors and Info — Two Levels
@@ -200,7 +202,7 @@ All event fields (`name`, `detail`, `step`, `code`) are automatically normalized
 1. **Buffering** -- Events are aggregated in memory. Duplicate events increment a counter rather than creating separate entries.
 2. **Periodic flush** -- Every 60 seconds (configurable), the buffer is sent to the ingest endpoint as a batch, split into multiple requests if it would exceed the 50 KB request body limit.
 3. **Page lifecycle flush** -- The SDK flushes when the page is hidden (`visibilitychange`) using `fetch()` with `keepalive: true`.
-4. **Session management** -- Sessions start on configure and on each `visibilitychange` to "visible", end on `visibilitychange` to "hidden" with immediate flush.
+4. **Session management** -- Sessions start on configure and on each `visibilitychange` to "visible", end on `visibilitychange` to "hidden" with immediate flush. A `configure()` call that changes any setting ends the current session and flushes it under the previous settings; one with identical settings keeps it.
 5. **Circuit breaker** -- Server errors trigger exponential backoff (30s -> 60s -> 5m -> 15m -> 60m).
 6. **Bounded memory** -- Buffer holds up to 1,000 unique entries. Beyond that, new entries are dropped and a console warning is logged (once per session).
 
@@ -219,7 +221,7 @@ The SDK captures a small set of **coarse, non-identifying** dimensions:
 | `language`    | `"en"`        | `navigator.language` (ISO 639-1 code)                     |
 | `appVersion`  | `"2.1.0"`     | Developer-provided via config                             |
 | `buildNumber` | `"142"`       | Developer-provided via config                             |
-| `sdkVersion`  | `"web/0.5.0"` | SDK platform and version identifier                       |
+| `sdkVersion`  | `"web/0.5.1"` | SDK platform and version identifier                       |
 
 ## What Trackless Does NOT Collect
 

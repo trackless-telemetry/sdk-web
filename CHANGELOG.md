@@ -5,6 +5,17 @@ All notable changes to the Trackless Telemetry Web SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-10-14
+
+### Fixed
+
+- **A second `configure()` no longer loses buffered events.** Calling `configure()` again with a different setting — a new API key when the user switches organization, say — replaced the event buffer without flushing it, so events recorded under the previous key were dropped. The current session's end is now added to the old buffer and that buffer is sent under the previous key, endpoint, environment and context before the new configuration starts its own session.
+- **The previous session now ends on reconfigure.** It used to be left with a start and no end; its `end` event, with duration and depth, now goes out under the previous key.
+- **A flush in flight when the key changes finishes under the key it started with.** A flush split into several requests read the key, endpoint and environment as each request went out, so a `configure()` landing between them could send the remaining requests under the new key.
+- **A changed `flushIntervalSeconds` or `autoScreenTracking` takes effect on reconfigure.** The old flush timer kept running at the old interval, and turning `autoScreenTracking` off left the `popstate` / `hashchange` listeners and the `history.pushState` hook in place. Both are now torn down and reinstalled from the new settings.
+- **A repeat `configure()` with identical settings keeps the current session.** SPA code that re-runs `configure()` on route mount started a new session on every call, inflating session counts. It now only replaces `onError` and logs `configure — settings unchanged, keeping the current session` under `debugLogging`.
+- **An opt-out no longer leads to a later send.** `setEnabled(false)` discarded the buffer but left the session open, so a later `destroy()` (or page hide) still sent that session's end. It now drops the session without sending anything, and `setEnabled(true)` starts a new session.
+
 ## [0.5.0] - 2026-09-18
 
 ### Added

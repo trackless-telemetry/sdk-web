@@ -121,6 +121,40 @@ function storedSeverity(sent: string | undefined): StoredSeverity {
   return sent === "info" || sent === "debug" ? "info" : "error";
 }
 
+/**
+ * Everything a `configure()` call resolves to except `onError`, which is a
+ * function and cannot be compared meaningfully. Two calls that resolve to equal
+ * settings describe the same running configuration.
+ */
+interface ResolvedSettings {
+  apiKey: string;
+  endpoint: string;
+  environment: Environment;
+  enabled: boolean;
+  flushIntervalSeconds: number;
+  autoScreenTracking: boolean;
+  debugLogging: boolean;
+  suppressWarnings: boolean;
+  appVersion: string | undefined;
+  buildNumber: string | undefined;
+}
+
+/**
+ * Where one flush sends its events: the buffer it drains and the key,
+ * endpoint, environment, context and circuit breaker it sends them under.
+ * Captured when the flush starts, so a `configure()` that lands while a flush
+ * is awaiting the network cannot send the previous key's events under the new
+ * one.
+ */
+interface FlushTarget {
+  buffer: EventBuffer;
+  circuitBreaker: CircuitBreaker;
+  apiKey: string;
+  endpoint: string;
+  environment: Environment;
+  context: EventContext;
+}
+
 export class Trackless {
   private static apiKey: string = "";
   private static endpoint: string = "";
@@ -130,6 +164,9 @@ export class Trackless {
   private static autoScreenTracking: boolean = false;
   private static debugLogging: boolean = false;
   private static suppressWarnings: boolean = false;
+  /** Raw `appVersion` / `buildNumber` as configured, kept to compare repeat `configure()` calls. */
+  private static appVersion: string | undefined = undefined;
+  private static buildNumber: string | undefined = undefined;
 
   private static enabled: boolean = false;
   private static destroyed = false;
@@ -164,23 +201,57 @@ export class Trackless {
     return Trackless.configured && !Trackless.destroyed;
   }
 
-  /** Configure the SDK and start a new session. */
+  /**
+   * Configure the SDK and start a new session.
+   *
+   * Safe to call again at runtime, for example to switch API key when the user
+   * changes organization. A repeat call whose settings all match the running
+   * configuration keeps the current session and buffer and only replaces
+   * `onError`. A call that changes any setting ends the current session, sends
+   * its buffered events under the previous key, endpoint and environment, and
+   * then starts fresh exactly as a first call does.
+   */
   static configure(config: TracklessConfig): void {
     try {
-      Trackless.apiKey = config.apiKey;
-      Trackless.endpoint = config.endpoint ?? DEFAULT_ENDPOINT;
-      Trackless.environment = config.environment ?? defaultEnvironment();
-      Trackless.enabled = config.enabled ?? true;
+      const settings: ResolvedSettings = {
+        apiKey: config.apiKey,
+        endpoint: config.endpoint ?? DEFAULT_ENDPOINT,
+        environment: config.environment ?? defaultEnvironment(),
+        enabled: config.enabled ?? true,
+        flushIntervalSeconds: config.flushIntervalSeconds ?? DEFAULT_FLUSH_INTERVAL_SECONDS,
+        autoScreenTracking: config.autoScreenTracking ?? false,
+        debugLogging: config.debugLogging ?? false,
+        suppressWarnings: config.suppressWarnings ?? false,
+        appVersion: config.appVersion,
+        buildNumber: config.buildNumber,
+      };
+
+      let reconfigured = false;
+      if (Trackless.isConfigured) {
+        if (Trackless.matchesRunningSettings(settings)) {
+          Trackless.onError = config.onError ?? (() => {});
+          Trackless.debug("configure — settings unchanged, keeping the current session");
+          return;
+        }
+        Trackless.retireRunningConfiguration();
+        reconfigured = true;
+      }
+
+      Trackless.apiKey = settings.apiKey;
+      Trackless.endpoint = settings.endpoint;
+      Trackless.environment = settings.environment;
+      Trackless.enabled = settings.enabled;
       Trackless.onError = config.onError ?? (() => {});
-      Trackless.flushIntervalSeconds =
-        config.flushIntervalSeconds ?? DEFAULT_FLUSH_INTERVAL_SECONDS;
-      Trackless.autoScreenTracking = config.autoScreenTracking ?? false;
-      Trackless.debugLogging = config.debugLogging ?? false;
-      Trackless.suppressWarnings = config.suppressWarnings ?? false;
+      Trackless.flushIntervalSeconds = settings.flushIntervalSeconds;
+      Trackless.autoScreenTracking = settings.autoScreenTracking;
+      Trackless.debugLogging = settings.debugLogging;
+      Trackless.suppressWarnings = settings.suppressWarnings;
+      Trackless.appVersion = settings.appVersion;
+      Trackless.buildNumber = settings.buildNumber;
 
       Trackless.buffer = new EventBuffer();
       Trackless.circuitBreaker = new CircuitBreaker();
-      Trackless.context = detectContext(config.appVersion, config.buildNumber);
+      Trackless.context = detectContext(settings.appVersion, settings.buildNumber);
       Trackless.session = new SessionManager();
       Trackless.funnels = new FunnelTracker();
       Trackless.featureReach = new FeatureReachTracker();
@@ -191,6 +262,11 @@ export class Trackless {
       Trackless.destroyed = false;
       Trackless.configured = true;
 
+      if (reconfigured) {
+        Trackless.debug(
+          "reconfigured — previous session ended and flushed under the previous settings",
+        );
+      }
       Trackless.debug(
         `configured — env=${Trackless.environment} endpoint=${Trackless.endpoint} flush=${Trackless.flushIntervalSeconds}s`,
       );
@@ -412,17 +488,26 @@ export class Trackless {
     }
   }
 
-  /** Toggle event recording. Disabling discards buffered data. */
+  /**
+   * Toggle event recording. Disabling discards buffered data and drops the
+   * session without sending its end; enabling again starts a new session.
+   */
   static setEnabled(isEnabled: boolean): void {
     try {
       Trackless.debug(`setEnabled — ${isEnabled}`);
       Trackless.enabled = isEnabled;
       if (!isEnabled) {
+        // Drop the session rather than end it: an opt-out must not lead to a later send.
         Trackless.buffer.clear();
+        Trackless.session.destroy();
+        Trackless.funnels.clear();
+        Trackless.featureReach.clear();
+        Trackless.errorReach.clear();
         Trackless.stopPeriodicFlush();
         Trackless.removeVisibilityListener();
         Trackless.teardownAutoScreenTracking();
       } else if (!Trackless.destroyed && Trackless.configured) {
+        Trackless.startNewSession();
         Trackless.startPeriodicFlush();
         Trackless.addVisibilityListener();
         if (Trackless.autoScreenTracking) {
@@ -434,7 +519,7 @@ export class Trackless {
     }
   }
 
-  /** Flush remaining events and clean up. Permanently disables the instance. */
+  /** End the session, flush remaining events and clean up. Events are dropped until `configure()` is called again. */
   static async destroy(): Promise<void> {
     try {
       if (Trackless.destroyed) return;
@@ -459,6 +544,64 @@ export class Trackless {
   }
 
   // ── Private helpers ───────────────────────────────────────────────────
+
+  /**
+   * Whether `settings` match the running configuration. `enabled` is compared
+   * with the live state, so a configure() after `setEnabled(false)` that asks
+   * for recording is a change, not a no-op.
+   */
+  private static matchesRunningSettings(settings: ResolvedSettings): boolean {
+    return (
+      settings.apiKey === Trackless.apiKey &&
+      settings.endpoint === Trackless.endpoint &&
+      settings.environment === Trackless.environment &&
+      settings.enabled === Trackless.enabled &&
+      settings.flushIntervalSeconds === Trackless.flushIntervalSeconds &&
+      settings.autoScreenTracking === Trackless.autoScreenTracking &&
+      settings.debugLogging === Trackless.debugLogging &&
+      settings.suppressWarnings === Trackless.suppressWarnings &&
+      settings.appVersion === Trackless.appVersion &&
+      settings.buildNumber === Trackless.buildNumber
+    );
+  }
+
+  /**
+   * Wind down the running configuration before a changed `configure()` applies.
+   *
+   * While recording is enabled, the current session's end goes into the
+   * current buffer and that buffer is flushed under the current key, endpoint,
+   * environment, context and circuit breaker. The flush is not awaited —
+   * `configure()` stays synchronous — and it drains the buffer before its first
+   * await, so nothing recorded under the new settings can join it. It runs
+   * without `keepalive`: the page is still alive, and keepalive's 64 KB
+   * in-flight quota is reserved for the page-hide flush. While recording is
+   * disabled, nothing is sent: `setEnabled(false)` already discarded the
+   * buffer and dropped the session.
+   *
+   * The flush timer, visibility listener and auto screen tracking are torn
+   * down so the new configuration installs its own.
+   */
+  private static retireRunningConfiguration(): void {
+    if (Trackless.enabled) {
+      Trackless.endCurrentSession();
+      Trackless.performFlush(false, Trackless.currentFlushTarget()).catch(() => {});
+    }
+    Trackless.stopPeriodicFlush();
+    Trackless.removeVisibilityListener();
+    Trackless.teardownAutoScreenTracking();
+  }
+
+  /** The running configuration's buffer and send settings, captured now. */
+  private static currentFlushTarget(): FlushTarget {
+    return {
+      buffer: Trackless.buffer,
+      circuitBreaker: Trackless.circuitBreaker,
+      apiKey: Trackless.apiKey,
+      endpoint: Trackless.endpoint,
+      environment: Trackless.environment,
+      context: Trackless.context,
+    };
+  }
 
   private static canRecord(): boolean {
     if (!Trackless.configured && !Trackless.preConfigureWarned) {
@@ -587,15 +730,26 @@ export class Trackless {
     }
   }
 
-  private static async performFlush(keepalive: boolean): Promise<void> {
-    if (Trackless.buffer.isEmpty) return;
-    if (!Trackless.circuitBreaker.canAttempt()) {
+  /**
+   * Drain `target`'s buffer and send it. `target` defaults to the running
+   * configuration, captured when the flush starts; every payload of this flush
+   * goes out under that capture even if `configure()` changes the key while
+   * an earlier payload is in flight. `keepalive` is set only by the page-hide
+   * flush, so the request can outlive the page.
+   */
+  private static async performFlush(
+    keepalive: boolean,
+    target: FlushTarget = Trackless.currentFlushTarget(),
+  ): Promise<void> {
+    const { buffer, circuitBreaker } = target;
+    if (buffer.isEmpty) return;
+    if (!circuitBreaker.canAttempt()) {
       Trackless.debug("flush skipped — circuit breaker open");
       return;
     }
 
-    const payloads = Trackless.buffer
-      .drain(Trackless.environment, Trackless.context)
+    const payloads = buffer
+      .drain(target.environment, target.context)
       .flatMap((payload) => Trackless.splitToBodyLimit(payload));
     if (payloads.length === 0) return;
 
@@ -603,15 +757,15 @@ export class Trackless {
       Trackless.debug(`flush — ${payload.events.length} events`);
       try {
         const result = await sendPayload(
-          Trackless.endpoint,
-          Trackless.apiKey,
+          target.endpoint,
+          target.apiKey,
           payload,
           FLUSH_TIMEOUT_MS,
           keepalive,
         );
 
         if (result.status >= 500) {
-          Trackless.circuitBreaker.recordFailure();
+          circuitBreaker.recordFailure();
           Trackless.warn(`flush failed — status=${result.status}`);
           Trackless.onError(new Error(`Flush failed with status ${result.status}`));
         } else if (result.status >= 400) {
@@ -619,11 +773,11 @@ export class Trackless {
           Trackless.warn(`flush rejected — status=${result.status}`);
           Trackless.onError(new Error(`Flush rejected with status ${result.status}`));
         } else {
-          Trackless.circuitBreaker.recordSuccess();
+          circuitBreaker.recordSuccess();
           Trackless.debug(`flush success — status=${result.status}`);
         }
       } catch (error) {
-        Trackless.circuitBreaker.recordFailure();
+        circuitBreaker.recordFailure();
         Trackless.warn("flush failed — network error");
         Trackless.onError(error instanceof Error ? error : new Error("Flush failed"));
       }
