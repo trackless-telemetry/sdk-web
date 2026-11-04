@@ -97,19 +97,25 @@ as if it were real.
 
 ### Configuration Options
 
-| Option                 | Type                        | Default                                                  | Description                                                                              |
-| ---------------------- | --------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `apiKey`               | `string`                    | **required**                                             | API key with `tl_` prefix                                                                |
-| `endpoint`             | `string`                    | `"https://api.tracklesstelemetry.com"`                   | Ingest endpoint URL                                                                      |
-| `environment`          | `"sandbox" \| "production"` | `"sandbox"` on localhost / loopback, else `"production"` | Set explicitly for staging, preview deploys, LAN IPs, `.local`/`.test` and `file:` pages |
-| `enabled`              | `boolean`                   | `true`                                                   | Set `false` to disable all recording                                                     |
-| `appVersion`           | `string`                    | `undefined`                                              | Your app's version (e.g., `"2.1.0"`)                                                     |
-| `buildNumber`          | `string`                    | `undefined`                                              | Your app's build number (e.g., `"142"`)                                                  |
-| `autoScreenTracking`   | `boolean`                   | `false`                                                  | Auto-track SPA route changes and hash navigation as view events                          |
-| `onError`              | `(error: Error) => void`    | no-op                                                    | Error callback for debugging                                                             |
-| `flushIntervalSeconds` | `number`                    | `60`                                                     | Flush interval in seconds                                                                |
-| `debugLogging`         | `boolean`                   | `false`                                                  | Enable debug logging for happy-path events                                               |
-| `suppressWarnings`     | `boolean`                   | `false`                                                  | Suppress warning and error logging to console                                            |
+| Option                   | Type                        | Default                                                  | Description                                                                                                                                        |
+| ------------------------ | --------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apiKey`                 | `string`                    | **required**                                             | API key with `tl_` prefix                                                                                                                          |
+| `endpoint`               | `string`                    | `"https://api.tracklesstelemetry.com"`                   | Ingest endpoint URL                                                                                                                                |
+| `environment`            | `"sandbox" \| "production"` | `"sandbox"` on localhost / loopback, else `"production"` | Set explicitly for staging, preview deploys, LAN IPs, `.local`/`.test` and `file:` pages                                                           |
+| `enabled`                | `boolean`                   | `true`                                                   | Set `false` to disable all recording                                                                                                               |
+| `appVersion`             | `string`                    | `undefined`                                              | Your app's version (e.g., `"2.1.0"`). Ingest does not store a value that looks like an identifier                                                  |
+| `buildNumber`            | `string`                    | `undefined`                                              | Your app's build number (e.g., `"142"`, or a short git SHA). Ingest does not store a value that looks like an identifier, such as a full git SHA   |
+| `autoScreenTracking`     | `boolean`                   | `false`                                                  | Auto-track SPA route changes and hash navigation as view events                                                                                    |
+| `onError`                | `(error: Error) => void`    | no-op                                                    | Error callback for debugging                                                                                                                       |
+| `flushIntervalSeconds`   | `number`                    | `60`                                                     | Flush interval in seconds                                                                                                                          |
+| `debugLogging`           | `boolean`                   | `false`                                                  | Enable debug logging for happy-path events                                                                                                         |
+| `suppressWarnings`       | `boolean`                   | `false`                                                  | Suppress warning and error logging to console                                                                                                      |
+| `measureLaunch`          | `boolean`                   | `false`                                                  | Send the page load time as `trackless.launch`, once per page load — see [Launch time and hangs](#launch-time-and-hangs-opt-in)                     |
+| `launchThresholdSeconds` | `number`                    | `undefined`                                              | Threshold for `trackless.launch`. A value that is not a positive number is ignored, with a warning                                                 |
+| `detectHangs`            | `boolean`                   | `false`                                                  | Send each main-thread long task of 250 ms or more as `trackless.hang` (Chromium only) — see [Launch time and hangs](#launch-time-and-hangs-opt-in) |
+| `captureUncaught`        | `boolean`                   | `false`                                                  | Count errors no code caught as the error `trackless.uncaught`, by error name — see [Uncaught exceptions](#uncaught-exceptions-opt-in)              |
+
+Changing `measureLaunch`, `launchThresholdSeconds`, `detectHangs` or `captureUncaught` in a repeat `configure()` counts as changed settings, like any other option: the current session ends and a new one starts.
 
 `appVersion` and `buildNumber`, when set, must be 1–50 characters of letters, digits, `.`, `_`, and `-`, or ingest rejects every packet — pass `undefined` rather than `""` (`value || undefined`). See Section 12.
 
@@ -234,7 +240,9 @@ Trackless.view("settings", "notifications");
 Trackless.view("dashboard", "filter-panel");
 ```
 
-Each `name + detail` combination is aggregated separately, so you can see which sections get the most attention. When `autoScreenTracking` is enabled, hash fragments are automatically captured as the detail — navigating to `yoursite.com/#pricing` records `view("home", "pricing")`.
+Each `name + detail` combination is aggregated separately, so you can see which sections get the most attention. When `autoScreenTracking` is enabled, a hash that is a plain anchor is automatically captured as the detail — navigating to `yoursite.com/#pricing` records `view("home", "pricing")`.
+
+A plain anchor is lowercase words of 1-20 letters with up to 3 trailing digits, joined by one `-` or `_`, where a word after the first may be a number of up to 4 digits, at 64 characters or fewer: `#pricing`, `#getting-started`, `#section-12`. Any other hash is left out and the view counts on its bare name, because a hash is where sign-in tokens (`#access_token=...`), share keys and recovery links go. That also leaves out hash-router paths (`#/settings/profile`) and camelCase anchors (`#getStarted`). A left-out hash shares the bare name's 60-second cooldown, so a hash-router app counts at most one view per path in that window; call `view(name, detail)` from your router instead. The shape cannot tell a word from a secret that fits it, such as a passphrase or your own short code (`abc123`, `invite-qzxkvmwp`), so if your links carry one in the hash or the path, keep `autoScreenTracking` off.
 
 **With React Router:**
 
@@ -326,9 +334,6 @@ const start = performance.now();
 const response = await fetch("/api/data");
 Trackless.performance("api_fetch_data", (performance.now() - start) / 1000);
 
-// Page load time
-Trackless.performance("page_load", 1.23);
-
 // Image processing time
 Trackless.performance("image_resize", 0.45);
 
@@ -339,11 +344,69 @@ Trackless.performance("api_fetch_data", (performance.now() - start) / 1000, 2.0)
 Trackless.performance("api_fetch_data", durationSeconds, thresholdSeconds);
 ```
 
-**When to use:** API latency, page load times, rendering durations, file processing times — any timing you want percentile distributions for (p50, p90, p99).
+**When to use:** API latency, rendering durations, file processing times — any timing you want percentile distributions for (p50, p90, p99). For the page load time and main-thread hangs, turn on the SDK's own metrics instead of timing them yourself ([Launch time and hangs](#launch-time-and-hangs-opt-in)).
+
+**Reserved names:** names starting with `trackless.` are reserved for the metrics the SDK measures itself. `performance()`, `startTimer()` and `measure()` log a warning once per page load when given one, and send it anyway. The same holds for `error()` and `info()` (`trackless.uncaught`); one warning covers all of them.
 
 **Threshold:** The optional third parameter defines a performance threshold in seconds. Each name/threshold combination is tracked separately, with breach counts (measurements exceeding the threshold) shown in the dashboard.
 
 **Important:** Duration is in **seconds** (not milliseconds). Divide `performance.now()` results by 1000. Typical values: 0.05–5.0 for API calls, 0.5–10.0 for page loads. Values &le; 0 are dropped. Threshold must be > 0.
+
+#### Timers and `measure`
+
+When the start and end of an operation are in different places, let the SDK keep the clock:
+
+```typescript
+Trackless.startTimer("checkout");
+// ... later, anywhere in the app
+Trackless.stopTimer("checkout", 2.0); // sends performance("checkout", elapsed, 2.0)
+Trackless.cancelTimer("checkout"); // abandoned — drops it, sends nothing
+```
+
+When the operation is one function, `measure` times it and returns its result. A returned promise is awaited, and `measure` returns a promise of the same value:
+
+```typescript
+const rows = Trackless.measure("csv_parse", () => parser.parse(file), 0.5);
+const feed = await Trackless.measure("feed_load", () => api.fetchFeed(), 2.0);
+```
+
+- The name is normalized at `startTimer`, like every event name, so `stopTimer("Checkout")` closes `startTimer("checkout")`.
+- `stopTimer` for a name with no open timer does nothing. Starting a name that is already open restarts it.
+- At most **50** timers are open at once; a start past that is ignored, with one warning per session.
+- **Session end discards every open timer** (the page becoming hidden), as do `setEnabled(false)`, a `configure()` with changed settings and `destroy()`. A timer never measures time the tab spent hidden, so a `stopTimer` after the user switched tabs mid-checkout sends nothing.
+- `measure` sends only when the function **returns or its promise resolves**: if it throws or the promise rejects, nothing is sent and the error reaches you unchanged. It sends nothing if the session ended first, and does not count toward the 50-timer cap.
+- Elapsed time comes from `performance.now()`. An elapsed time below zero or above a day is dropped.
+- Timers live in memory only — no cookies, `localStorage`, `sessionStorage` or IndexedDB.
+
+#### Launch time and hangs (opt-in)
+
+Two metrics the SDK can measure for you. Both are **off by default**; turn them on in `configure()`:
+
+```typescript
+Trackless.configure({
+  apiKey: "tl_your_api_key_here",
+  measureLaunch: true, // trackless.launch
+  launchThresholdSeconds: 3.0, // optional threshold for it
+  detectHangs: true, // trackless.hang
+});
+```
+
+| Metric             | What one sample is                                                                                                                                               | Threshold                          |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `trackless.launch` | Seconds from navigation start to the `load` event, from the page's `PerformanceNavigationTiming` entry (`loadEventStart`). Sent once per page load               | `launchThresholdSeconds`, when set |
+| `trackless.hang`   | Seconds of each main-thread long task of **250 ms or more**, from a `PerformanceObserver` on `longtask` entries, reported by the browser after the task finishes | None — every sample is over 250 ms |
+
+- **Launch is the page load, not when `configure()` ran.** If `load` has already fired when you call `configure()`, the entry is read at once; otherwise it is read when `load` fires. Calling `configure()` late does not change the value.
+- **One launch per page load.** A soft navigation inside a single-page app (`pushState`, a router change) is not a launch, and a later `configure()` does not measure again. A launch measured while recording is disabled is not sent. Where the browser has no navigation entry, nothing is sent.
+- **A page that did not load in front of the user sends no launch time.** That is a prerendered page (`document.prerendering` at `configure()`, or a navigation entry whose `activationStart` is after zero) and a page hidden at any time before `load`, such as a tab opened in the background. Chromium records `visibility-state` performance entries, so there any `hidden` entry at or before `loadEventStart` skips the launch, whenever `configure()` runs. Other browsers skip it when the page is hidden at `configure()`, or goes hidden between `configure()` and `load`; a `configure()` after `load` in those browsers cannot see an earlier hidden period, so that launch is still sent. A page hidden only after `load` still sends its launch. All of this is read in memory; nothing is stored and nothing more is sent.
+- **A launch longer than 60 seconds is dropped, not clipped.** Nothing is sent for that page load, as for a negative value.
+- **Hang data is Chromium-only.** The `longtask` entry type exists only in Chromium-based browsers (Chrome, Edge, Opera, Samsung Internet). Safari and Firefox send **no** hang data, silently — compare hang counts per browser engine, not across all visitors.
+- **The observer runs only while the page is visible.** It disconnects when the page is hidden and reconnects when it is visible again, with `buffered: false`, so tasks from before it started or from a hidden tab are never read.
+- Nothing is stored and nothing about earlier page loads is read — no cookies, `localStorage`, `sessionStorage` or IndexedDB. A hang outside 0 to 86,400 seconds is dropped.
+- Neither counts toward the session's depth: they describe the page, not something the user did.
+- Each platform measures launch its own way, and the performance page merges every platform unless you filter it, so filter by platform before comparing launch times.
+
+**Disclosure.** There is no store privacy label on the web, but if your privacy notice lists what you measure, add the page load time and main-thread hang durations before you turn these on. If the same app also ships on iOS or Android with these options on, its App Store label needs **Diagnostics → Performance Data** and its Play Data safety form **App info and performance → Diagnostics**.
 
 ### Errors
 
@@ -368,6 +431,29 @@ try {
 ```
 
 **When to use:** Caught exceptions, failed API calls, validation errors — any error condition you want to trend. Every `error()` call counts toward errors per session and toward every alert.
+
+#### Uncaught exceptions (opt-in)
+
+The SDK can count the errors no code caught. It is **off by default**; turn it on in `configure()`:
+
+```typescript
+Trackless.configure({
+  apiKey: "tl_your_api_key_here",
+  captureUncaught: true, // error("trackless.uncaught", <error name>)
+});
+```
+
+Each uncaught error is sent as an ordinary error, `trackless.uncaught`, with the error's `name` as its code, normalized like any code: a `TypeError` arrives as `typeerror`, and a name normalization rejects (one that looks like an identifier, say) arrives as `unknown`, so the error is still counted. It goes through the same buffer as `error()`, counts toward errors per session and every alert, and the dashboard's **By code** breakdown shows the names.
+
+- **Two listeners on `window`:** `error`, for an exception thrown and not caught, and `unhandledrejection`, for a promise rejected with no handler. A rejection's code is the reason's `name` when the reason is an `Error`, and `non_error` when it is anything else (a string, an object, `undefined`); a thrown value that is not an `Error` is `non_error` too.
+- **Only the name goes into the event.** Never the message, the stack, the file name or the line. The file name is read only for the extension check below.
+- **Skipped on purpose:** an opaque cross-origin **"Script error."**, which the browser reports with no error object for a script from another origin served without CORS, and errors whose `filename` is a browser-extension script (`chrome-extension:`, `moz-extension:`, `safari-extension:`, `safari-web-extension:`). The file name is compared in memory and never sent. A rejection carries no file name, so a rejection from an extension script is counted.
+- **The browser still logs every error.** The listeners never call `preventDefault()`, and they run alongside any other error handler or reporter on the page.
+- Minified builds can rename your own error classes, so their names may arrive short or meaningless; built-in names (`TypeError`, `RangeError`, `SyntaxError`) survive.
+- The listeners are added on `configure()` and removed by `setEnabled(false)`, a `configure()` that turns the option off, and `destroy()`.
+- Never call `error()` or `info()` with a `trackless.` name yourself: the prefix is reserved, and the SDK warns once and sends it anyway.
+
+**Disclosure.** There is no store privacy label on the web, but if your privacy notice lists what you measure, add a count of uncaught errors by name. If the same app also ships on Android or iOS with `captureUncaught` on, its Play Data safety form needs **App info and performance → Crash logs** and its App Store label **Diagnostics → Crash Data**.
 
 ### Info
 
@@ -410,15 +496,15 @@ Replace `error(name, Severity.WARNING, code)` with `error(name, code)`, and `err
 
 All event fields (`name`, `detail`, `step`, `code`) are automatically normalized before buffering:
 
-| Rule               | Detail                                                                                          |
-| ------------------ | ----------------------------------------------------------------------------------------------- |
-| **Auto-lowercase** | Fields are lowercased — `Export_Clicked` becomes `export_clicked`                               |
-| **Auto-normalize** | Spaces and invalid characters are replaced with `_` — `Sign Up Button` becomes `sign_up_button` |
-| **Trim**           | Leading/trailing underscores and dots are removed — `...foo...` becomes `foo`                   |
-| **Collapse dots**  | Consecutive dots are collapsed — `foo..bar` becomes `foo.bar`                                   |
-| **Truncate**       | Truncated to 100 characters                                                                     |
-| **No identifiers** | UUIDs, long hex strings, and numeric-only strings >12 chars are rejected                        |
-| **PII stripping**  | Emails, phone numbers, and SSN patterns are stripped from all fields                            |
+| Rule               | Detail                                                                                                                                                                       |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Auto-lowercase** | Fields are lowercased — `Export_Clicked` becomes `export_clicked`                                                                                                            |
+| **Auto-normalize** | Spaces and invalid characters are replaced with `_` — `Sign Up Button` becomes `sign_up_button`                                                                              |
+| **Trim**           | Leading/trailing underscores and dots are removed — `...foo...` becomes `foo`                                                                                                |
+| **Collapse dots**  | Consecutive dots are collapsed — `foo..bar` becomes `foo.bar`                                                                                                                |
+| **Truncate**       | Truncated to 100 characters                                                                                                                                                  |
+| **No identifiers** | A UUID or 24+ hex characters anywhere in a field, a hex-only value >16 chars, and a numeric-only value >12 chars are rejected, checked before PII stripping as well as after |
+| **PII stripping**  | Emails, phone numbers, and SSN patterns are stripped from all fields                                                                                                         |
 
 **Valid characters after normalization:** Lowercase `a-z`, digits `0-9`, underscores `_`, hyphens `-`, dots `.`
 
@@ -606,11 +692,11 @@ Trackless collects **no user identifiers** and stores **only aggregate counts**.
 - **No IP address processing by application code** — IP addresses are never read, parsed, stored, or used by the SDK or the Trackless backend. Region comes from `navigator.language`, not IP geolocation. (AWS infrastructure receives IP addresses for network routing and DDoS protection as part of standard cloud operations, but they are not used for analytics.)
 - **No cross-session linking** — all session state is in-memory only
 - **No data sent to third parties** — events go only to your configured endpoint
-- **No stack traces, crash logs, or error messages** — error and info tracking uses only developer-defined names and codes
-- **No individual performance measurements stored** — durations are aggregated server-side into statistical digests (t-digest)
+- **No stack traces or error messages** — error and info tracking uses only developer-defined names and codes; with `captureUncaught` on, the SDK adds a count of uncaught errors by name, and nothing else about them
+- **No performance measurement stored as its own record** — durations are aggregated server-side into statistical digests (t-digest); a row with very few samples approximates their values
 - **PII auto-stripping** — email addresses, phone numbers, and SSN patterns are automatically stripped from all event fields before buffering
 
-The only context collected is: platform (`"web"`), OS version (major.minor from user agent), device class (phone/tablet/desktop from screen width heuristic), locale (from `navigator.language`), language (ISO 639-1 code from `navigator.language`, e.g., `"en"`), and `sdkVersion` (e.g., `web/0.5.1`). All are coarse, non-identifying dimensions. The page hostname is read only to choose the default environment and is never sent.
+The only context collected is: platform (`"web"`), OS version (major.minor from user agent), device class (phone/tablet/desktop from screen width heuristic), locale (from `navigator.language`), language (ISO 639-1 code from `navigator.language`, e.g., `"en"`), and `sdkVersion` (e.g., `web/0.6.0`). All are coarse, non-identifying dimensions. The page hostname is read only to choose the default environment and is never sent.
 
 ## 10. Environment Variables
 

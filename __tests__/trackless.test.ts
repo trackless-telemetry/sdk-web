@@ -798,6 +798,87 @@ describe("Auto Screen Tracking", () => {
     expect(aboutView).toBeDefined();
     expect(aboutView.detail).toBeUndefined();
   });
+
+  it.each([
+    "pricing",
+    "getting-started",
+    "agent-context",
+    "privacy-collection",
+    "faq_2",
+    "section-12",
+    "h2",
+    "release-2026",
+  ])("a plain anchor #%s is recorded as view detail", async (anchor) => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/", hash: `#${anchor}` },
+      writable: true,
+      configurable: true,
+    });
+
+    configure({ autoScreenTracking: true });
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const homeView = body.events.find((e: any) => e.name === "home" && e.type === "view");
+    expect(homeView.detail).toBe(anchor);
+  });
+
+  it.each([
+    ["an OAuth implicit-flow token", "access_token=ya29.a0AfB_byC&token_type=Bearer", "ya29"],
+    ["a recovery link", "access_token=abc&type=recovery", "recovery"],
+    ["a key parameter", "key=sEcReTvAlUe", "secretvalue"],
+    ["a JWT", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl", "eyjhbg"],
+    ["a mixed-case share key", "x7Qm2LpZ9vKt4RwY8nHb3s", "x7qm2"],
+    ["a lowercase token mixing letters and digits", "x7qm2lpz9vkt4rwy8nhb3s", "x7qm2"],
+    ["a long lowercase token", "qzxvkjwpfyhgbtdnrmlscvqzxw", "qzxvkjwp"],
+    ["a one-time code", "123456", "123456"],
+    ["a UUID", "6fe8b8e2-0bd7-4e4a-9d6b-aeb89f4d6241", "6fe8b8e2"],
+    ["a hash-router path", "/users/jane/profile", "jane"],
+    ["a hashbang route", "!/users/jane", "jane"],
+    ["a hash-router query", "/callback?code=abc123", "abc123"],
+    ["a percent-encoded value", "jane%40example.com", "jane"],
+    ["a dotted value", "jane.doe", "jane"],
+    ["a camelCase value", "getStarted", "getstarted"],
+    ["a doubled separator", "get--started", "get"],
+    ["a value over 64 characters", "section-".repeat(9) + "end", "section"],
+  ])("%s in the hash is left out and the view still counts", async (_label, hash, secret) => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/callback", hash: `#${hash}` },
+      writable: true,
+      configurable: true,
+    });
+
+    configure({ autoScreenTracking: true });
+    await Trackless.flush();
+
+    const sent = fetchSpy.mock.calls[0][1].body as string;
+    const view = JSON.parse(sent).events.find((e: any) => e.type === "view");
+    expect(view.name).toBe("callback");
+    expect(view.detail).toBeUndefined();
+    expect(sent.toLowerCase()).not.toContain(secret);
+  });
+
+  it("a left-out hash shares the bare name's cooldown", async () => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/callback", hash: "#access_token=first" },
+      writable: true,
+      configurable: true,
+    });
+    configure({ autoScreenTracking: true });
+
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/callback", hash: "#access_token=second" },
+      writable: true,
+      configurable: true,
+    });
+    window.dispatchEvent(new Event("hashchange"));
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    const views = body.events.filter((e: any) => e.type === "view");
+    expect(views).toHaveLength(1);
+    expect(views[0].detail).toBeUndefined();
+  });
 });
 
 // ─── 9b. Auto Screen Tracking — Dynamic Segment Stripping (7 tests) ────────
@@ -823,6 +904,22 @@ describe("Auto Screen Tracking — Dynamic Segment Stripping", () => {
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
     expect(body.events.some((e: any) => e.name === "apps_-id-_sessions" && e.type === "view")).toBe(
+      true,
+    );
+  });
+
+  it("segment holding an embedded UUID is replaced with -id-", async () => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/users/user-E2EBBBC5-f5e9-42eb-8913-4ef078b9b4a6/profile" },
+      writable: true,
+      configurable: true,
+    });
+
+    configure({ autoScreenTracking: true });
+    await Trackless.flush();
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(body.events.some((e: any) => e.name === "users_-id-_profile" && e.type === "view")).toBe(
       true,
     );
   });

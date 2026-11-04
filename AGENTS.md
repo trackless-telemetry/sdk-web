@@ -39,6 +39,10 @@ Trackless.view(name: string, detail?: string): void
 Trackless.feature(name: string, detail?: string): void
 Trackless.funnel(funnelName: string, stepIndex: number, stepName: string): void
 Trackless.performance(name: string, durationSeconds: number, thresholdSeconds?: number): void
+Trackless.startTimer(name: string): void
+Trackless.stopTimer(name: string, thresholdSeconds?: number): void  // sends performance(); no-op if not open
+Trackless.cancelTimer(name: string): void                           // drops it, sends nothing
+Trackless.measure<T>(name: string, fn: () => T, thresholdSeconds?: number): T  // awaits a returned promise
 Trackless.error(name: string, code?: string): void
 Trackless.info(name: string, detail?: string): void
 Trackless.flush(): Promise<void>
@@ -48,7 +52,35 @@ Trackless.destroy(): Promise<void>
 
 `TracklessConfig`: `{ apiKey: string; endpoint?; environment?; enabled?; onError?;
 autoScreenTracking?; flushIntervalSeconds?; appVersion?; buildNumber?; debugLogging?;
-suppressWarnings? }` — only `apiKey` is required.
+suppressWarnings?; measureLaunch?; launchThresholdSeconds?; detectHangs?; captureUncaught? }` —
+only `apiKey` is required.
+
+## Launch time and hangs (opt-in)
+
+- `measureLaunch: true` sends `trackless.launch` once per page load: seconds from navigation
+  start to the `load` event (`PerformanceNavigationTiming`). Soft navigations are not launches.
+  A prerendered page or one hidden before `load` (a background tab) sends none, and a launch
+  longer than 60 seconds is dropped. Do not hand-roll a `page_load` metric alongside it.
+- `detectHangs: true` sends one `trackless.hang` sample (seconds) for each `longtask` entry of
+  250 ms or more, only while the page is visible. **Chromium-only**: Safari and Firefox send no
+  hang data.
+- Both are **off by default**. If the developer's privacy notice lists what is measured, it
+  needs the load time and hang durations added; say so when you turn one on.
+- Names starting with `trackless.` are reserved for what the SDK sends itself. Never pass one to
+  `performance()`, `startTimer()`, `measure()`, `error()` or `info()` (the SDK warns once and
+  sends it anyway).
+
+## Uncaught exceptions (opt-in)
+
+- `captureUncaught: true` counts errors no code caught, from window `error` and
+  `unhandledrejection` listeners, as `error("trackless.uncaught", <error name>)`, e.g.
+  `typeerror`; a rejection with a value that is not an `Error` is `non_error`. No message, stack
+  or file name goes into the event; the file name is compared in memory for the extension check.
+- Skipped: opaque cross-origin "Script error." events and errors from browser-extension scripts.
+  The listeners never call `preventDefault()`. Do not add your own `window.onerror` that calls
+  `error()` alongside it.
+- **Off by default.** If the developer's privacy notice lists what is measured, it needs a count
+  of uncaught errors added; say so when you turn it on.
 
 ## Errors and info
 
@@ -78,7 +110,9 @@ suppressWarnings? }` — only `apiKey` is required.
   never hardcode it in committed source.
 - Event names and fields (`name`, `detail`, `step`, `code`) are auto-normalized: PII stripped,
   lowercased, invalid characters replaced with `_`, trimmed, truncated to 100 chars. Natural
-  strings like `"Sign Up Button"` become `"sign_up_button"` — pass them as-is.
+  strings like `"Sign Up Button"` become `"sign_up_button"` — pass them as-is. A field containing
+  a UUID or a long hex ID is rejected whole, even with a prefix (`user-<uuid>`), so never build a
+  field from an identifier.
 - `performance()` takes **seconds**, not milliseconds.
 - Environment: with none configured, web sends `"sandbox"` on `localhost`, `*.localhost`,
   `127.x.x.x`, `[::1]` and `0.0.0.0`, and `"production"` everywhere else. An explicit value

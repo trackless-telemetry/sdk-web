@@ -51,6 +51,10 @@ export declare class Trackless {
     /** Raw `appVersion` / `buildNumber` as configured, kept to compare repeat `configure()` calls. */
     private static appVersion;
     private static buildNumber;
+    private static measureLaunch;
+    private static launchThresholdSeconds;
+    private static detectHangs;
+    private static captureUncaught;
     private static enabled;
     private static destroyed;
     private static configured;
@@ -67,6 +71,20 @@ export declare class Trackless {
     private static featureReach;
     /** Per-session first-occurrence set backing error-reach `firstOccurrences` marking. Reset on session end. */
     private static errorReach;
+    /**
+     * Open timers. Not replaced on `configure()`, so a timer started before the
+     * first configure survives it; a reconfigure discards them through
+     * `endCurrentSession()`.
+     */
+    private static timers;
+    /** The `measureLaunch` probe. Never replaced, so it measures once per page load. */
+    private static launch;
+    /** The `detectHangs` long-task observer, running only while the page is visible. */
+    private static hangs;
+    /** The `captureUncaught` window listeners, attached only while recording. */
+    private static uncaught;
+    /** One-shot flag: the reserved-prefix warning is logged once per page load. */
+    private static reservedPrefixWarned;
     private static flushTimer;
     private static visibilityHandler;
     private static popstateHandler;
@@ -93,8 +111,62 @@ export declare class Trackless {
     static feature(name: string, detail?: string): void;
     /** Record a funnel step. */
     static funnel(funnelName: string, stepIndex: number, stepName: string): void;
-    /** Record a performance measurement. */
+    /**
+     * Record a performance measurement.
+     *
+     * Names starting with `trackless.` are reserved for the metrics the SDK
+     * measures itself (`trackless.launch`, `trackless.hang`). Passing one logs a
+     * warning once per page load; the measurement is still sent.
+     */
     static performance(name: string, durationSeconds: number, thresholdSeconds?: number): void;
+    /**
+     * Start a timer for a performance measurement.
+     *
+     * The name is normalized here, exactly as `performance()` normalizes its
+     * name, so `stopTimer("Checkout")` closes `startTimer("checkout")`. A name
+     * normalization rejects is ignored with the usual warning. Starting a name
+     * that is already open restarts it. At most 50 timers are open at once; a
+     * start past that is ignored, with one warning per session.
+     *
+     * Open timers live in memory only. **Session end discards every open
+     * timer** — the session ends when the page is hidden — as do
+     * `setEnabled(false)`, a `configure()` with changed settings and
+     * `destroy()`, so a timer never measures time the page spent hidden.
+     * Elapsed time comes from `performance.now()`.
+     */
+    static startTimer(name: string): void;
+    /**
+     * Stop the timer `name` and send its elapsed time, in seconds, as
+     * `performance(name, elapsed, thresholdSeconds)`.
+     *
+     * Does nothing when no timer of that name is open: never started, already
+     * stopped or cancelled, or discarded when the session ended. An elapsed time
+     * below zero or above a day is dropped.
+     */
+    static stopTimer(name: string, thresholdSeconds?: number): void;
+    /**
+     * Drop the timer `name` without sending anything — the operation was
+     * abandoned, or failed in a way its duration should not describe.
+     */
+    static cancelTimer(name: string): void;
+    /**
+     * Time `fn` and send its duration as a performance measurement, returning
+     * what `fn` returns.
+     *
+     * When `fn` returns a promise, the measurement covers the time until it
+     * settles and `measure()` returns a promise of the same value. The
+     * measurement is sent **only when `fn` returns, or its promise resolves**:
+     * if `fn` throws or the promise rejects, nothing is sent and the error
+     * reaches the caller unchanged. Nothing is sent when the session ended (the
+     * page was hidden) before `fn` finished. `measure()` does not use the
+     * open-timer map, so it never counts toward the 50-timer cap.
+     *
+     * ```typescript
+     * const feed = await Trackless.measure("feed_load", () => api.fetchFeed(), 2.0);
+     * ```
+     */
+    static measure<T>(name: string, fn: () => Promise<T>, thresholdSeconds?: number): Promise<T>;
+    static measure<T>(name: string, fn: () => T, thresholdSeconds?: number): T;
     /**
      * Record an error event with an explicit severity.
      *
@@ -118,12 +190,51 @@ export declare class Trackless {
      */
     static info(name: string, detail?: string): void;
     /**
-     * Shared path behind `error()` and `info()`: same normalization, PII guard,
-     * session-reach marker, depth increment and rollup key. `severity` is already
-     * mapped to one of the two stored levels, so the buffer's rollup key collapses
-     * one name reported at several legacy severities into a single entry.
+     * Shared path behind `error()`, `info()` and `captureUncaught`: same
+     * normalization, PII guard, session-reach marker and rollup key. `severity` is
+     * already mapped to one of the two stored levels, so the buffer's rollup key
+     * collapses one name reported at several legacy severities into a single
+     * entry. A developer's call (`fromSdk` false) warns on a reserved name and
+     * counts toward the session's depth; the SDK's own send does neither.
      */
     private static recordErrorEvent;
+    private static isThenable;
+    /** Send the measurement for one `measure()` call whose `fn` finished normally. */
+    private static finishMeasure;
+    /**
+     * The send behind `stopTimer()` and `measure()`: `performance()` with an
+     * elapsed time the SDK measured, under a name that is already normalized.
+     */
+    private static recordTimer;
+    /**
+     * Warn once per page load when a developer's normalized name has the
+     * reserved prefix. `kind` names the call in the message.
+     */
+    private static warnIfReserved;
+    /** A positive, finite threshold, or undefined. */
+    private static validThreshold;
+    /** Recording, without the pre-configure warning `canRecord()` logs. */
+    private static isRecording;
+    /**
+     * Send the launch time the probe measured — only while recording with
+     * `measureLaunch` on. A launch measured while recording is disabled, or
+     * after a reconfigure turned the option off, is dropped.
+     */
+    private static deliverLaunch;
+    /** Start the long-task observer when `detectHangs` is on and the page is visible. */
+    private static startHangsIfVisible;
+    /**
+     * Attach the `captureUncaught` listeners when the option is on. Each
+     * uncaught error or rejection is recorded as `error("trackless.uncaught",
+     * <name>)`; a name normalization rejects is sent as `unknown`.
+     */
+    private static startUncaughtIfWanted;
+    /**
+     * Buffer one metric the SDK measured itself. Same bounds as a timer; no
+     * reserved-name warning, and no session activity — it describes the page,
+     * not anything the user did.
+     */
+    private static recordSdkMetric;
     /** Force flush pending events to the ingest endpoint. */
     static flush(): Promise<void>;
     /**
@@ -163,30 +274,52 @@ export declare class Trackless {
      * Normalize an event field (name, detail, step, code) into a valid format.
      * Strips PII, lowercases, replaces invalid chars with underscores, and validates.
      * Returns null if the result is empty or matches an abuse pattern.
+     *
+     * The abuse patterns run on the whole value before the PII strip as well as on
+     * the result: the phone pattern eats runs of digits inside a UUID or hex ID, and
+     * truncating can cut one short, either of which leaves a part no rule matches.
      */
     private static normalizeField;
+    /** Lowercases and reduces a value to the characters and shape a field allows. */
+    private static sanitizeField;
+    /** True when a sanitized field looks like an identifier and must not be sent. */
+    private static isAbusePattern;
+    /** The PII marker beside 8+ characters of hex-only tokens: what remains of an ID. */
+    private static hasRedactedIdResidue;
     private static debug;
     private static warn;
     private static addEvent;
     /**
      * Strip PII patterns (emails, SSNs, phone numbers) from a string,
      * replacing matches with [REDACTED].
+     *
+     * Swift and Kotlin spell out what `\b` means in the SSN patterns, ASCII letters, digits and
+     * `_`, because their regex engines do not agree with it. Those patterns stay without the `u`
+     * flag, and nothing here uses lookbehind: it is a syntax error before Safari 16.4 and the SDK
+     * would not load.
      */
     private static stripPII;
-    /** Matches UUID format: 8-4-4-4-12 hex with hyphens or underscores */
+    /**
+     * A UUID anywhere in the value, by its first four groups (8-4-4-4) so one with its
+     * tail cut off is found too, with any run of hyphens, underscores or dots between them
+     */
     private static readonly UUID_REGEX;
-    /** Consecutive hex characters > 24 */
+    /** 24 or more consecutive hex characters anywhere in the value */
     private static readonly LONG_HEX_REGEX;
     /** Numeric-only strings > 12 characters */
     private static readonly LONG_NUMERIC_REGEX;
     /** Entirely hex characters and longer than 16 characters */
     private static readonly ALL_HEX_REGEX;
-    /** UUID in a URL path segment (8-4-4-4-12 hex with hyphens) */
-    private static readonly EMBEDDED_UUID_RE;
     /** 6+ digit numeric ID in a URL path segment */
     private static readonly LONG_NUMERIC_RE;
     /** 12+ hex chars in a URL path segment (MongoDB ObjectIDs, short hashes) */
     private static readonly LONG_HEX_RE;
+    /**
+     * Lowercase words of 1-20 letters with up to 3 trailing digits, joined by one `-` or `_`.
+     * A word after the first may instead be a number of up to 4 digits.
+     */
+    private static readonly ANCHOR_RE;
+    private static readonly ANCHOR_MAX_LENGTH;
     private static normalizeName;
     private static startNewSession;
     private static endCurrentSession;
@@ -216,7 +349,18 @@ export declare class Trackless {
     private static setupAutoScreenTracking;
     private static teardownAutoScreenTracking;
     private static recordScreenView;
-    /** Replace dynamic URL segments (UUIDs, long numeric IDs, long hex strings) with `-id-` */
+    /**
+     * Whether a URL hash reads as a section anchor. Browsers never send a hash to a
+     * server, so it is where sign-in tokens, share keys and recovery links go, and the
+     * SDK must not be what sends one. The shape is an allowlist because a left-out hash
+     * costs little: the view still counts on its bare name, under that name's cooldown.
+     */
+    private static isPlainAnchor;
+    /**
+     * Replace dynamic URL segments with `-id-`: anything the abuse patterns would
+     * reject, so `/users/user-<uuid>/profile` is still counted as a view, plus the
+     * shorter numeric and hex IDs below.
+     */
     private static stripDynamicSegments;
     /** Convert a URL path to a screen name */
     private static pathToScreenName;

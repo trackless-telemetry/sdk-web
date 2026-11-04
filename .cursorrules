@@ -17,6 +17,7 @@ This package is `@trackless-telemetry/sdk-web`, a privacy-first web analytics SD
    - `Trackless.performance("api_fetch", 0.342)` — durationSeconds in seconds (optional thresholdSeconds: `Trackless.performance("api_fetch", 0.342, 2.0)`)
    - `Trackless.error("payment_failed", "DECLINED")` — something went wrong; counts toward errors per session and every alert
    - `Trackless.info("tier", "paid")` — something worth counting that the user did not do and that did not go wrong; never counts toward errors or alerts
+   - `Trackless.startTimer("checkout")` / `Trackless.stopTimer("checkout", 2.0)` / `Trackless.cancelTimer("checkout")`, or `await Trackless.measure("feed_load", () => api.fetchFeed(), 2.0)` — timing without reading a clock yourself; session end (page hidden) discards open timers
 
 ## Important Rules
 
@@ -28,6 +29,9 @@ This package is `@trackless-telemetry/sdk-web`, a privacy-first web analytics SD
 - Store the API key in an environment variable (e.g., `VITE_TRACKLESS_API_KEY`), never hardcode in committed source
 - Event names and fields (`detail`, `step`, `code`) are auto-normalized: lowercased, spaces/special chars replaced with `_`, trimmed, truncated to 100 chars. Developers can pass natural strings like `"Sign Up Button"` (becomes `"sign_up_button"`). Use the optional `detail` parameter on `feature()` and `view()` to distinguish variants — dashboard auto-groups features with detail values into donut charts
 - Performance duration is in **seconds**, not milliseconds
+- For page load time and main-thread hangs, use `configure({ ..., measureLaunch: true, detectHangs: true })` instead of hand-rolled metrics. A prerendered page or one hidden before `load` sends no launch time, and a launch longer than 60 seconds is dropped. Both are off by default; hang data comes from Chromium browsers only
+- To count uncaught errors, use `configure({ ..., captureUncaught: true })`: each uncaught error or unhandled rejection is sent as `error("trackless.uncaught", <error name>)`, with no message or stack; opaque cross-origin errors and browser-extension errors are skipped. Off by default; if the developer's privacy notice lists what they measure, it should add this
+- Names starting with `trackless.` are reserved for the SDK's own events (`trackless.launch`, `trackless.hang`, `trackless.uncaught`) — never pass one to `performance()`, `startTimer()`, `measure()`, `error()` or `info()`
 - `environment` defaults to `"sandbox"` only on localhost / `*.localhost` / `127.x.x.x` / `[::1]` / `0.0.0.0`, and to `"production"` everywhere else; an explicit value always wins. Set it explicitly for LAN IPs, `.local`/`.test` hosts, staging, preview deploys and Electron / `file:` pages
 - The SDK sends no distribution channel and never sends the page hostname — do NOT add one
 - Entry-point `configure()` (main.ts) needs no `destroy()`; call `Trackless.destroy()` only in effect-mounted setups (e.g., Next.js app-router useEffect cleanup)

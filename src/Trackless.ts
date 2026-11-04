@@ -7,6 +7,11 @@ import { SessionManager } from "./session.js";
 import { FunnelTracker } from "./funnel.js";
 import { FeatureReachTracker } from "./featureReach.js";
 import { ErrorReachTracker } from "./errorReach.js";
+import { OpenTimers, MAX_OPEN_TIMERS, MAX_TIMER_ELAPSED_SECONDS } from "./timers.js";
+import type { TimerStart } from "./timers.js";
+import { LaunchProbe } from "./launch.js";
+import { HangObserver } from "./hangs.js";
+import { UncaughtListener } from "./uncaught.js";
 import { sendPayload } from "./http.js";
 
 export type { TracklessConfig } from "./types.js";
@@ -56,6 +61,34 @@ const BUFFER_FLUSH_THRESHOLD = 100;
 
 /** Default production ingest endpoint */
 const DEFAULT_ENDPOINT = "https://api.tracklesstelemetry.com";
+
+/**
+ * Names starting with this are reserved for what the SDK sends itself.
+ * `performance()`, `startTimer()`, `measure()`, `error()` and `info()` warn
+ * once per page load when given one, and send it anyway.
+ */
+const RESERVED_NAME_PREFIX = "trackless.";
+
+/** The metric `measureLaunch` sends. */
+const LAUNCH_METRIC = "trackless.launch";
+
+/** The metric `detectHangs` sends. */
+const HANG_METRIC = "trackless.hang";
+
+/** The error `captureUncaught` sends. */
+const UNCAUGHT_ERROR = "trackless.uncaught";
+
+/** The code sent when an error's name does not survive normalization. */
+const UNCAUGHT_UNKNOWN_CODE = "unknown";
+
+// Every non-ASCII character but the Unicode spaces the phone pattern lists can be part of an address.
+const EMAIL_NON_ASCII = String.raw`\u00A1-\u167F\u1681-\u1FFF\u200B-\u2027\u202A-\u202E\u2030-\u205E\u2060-\u2FFF\u3001-\uFEFE\uFF00-\u{10FFFF}`;
+// The limits are the RFC's, and what keeps this linear with no boundary to start from.
+// `u` makes them count code points, as Swift and Kotlin do.
+const EMAIL_RE = new RegExp(
+  String.raw`[A-Za-z0-9._%+\-${EMAIL_NON_ASCII}]{1,64}@[A-Za-z0-9.\-${EMAIL_NON_ASCII}]{1,255}\.[A-Za-z${EMAIL_NON_ASCII}]{2,}`,
+  "gu",
+);
 
 /**
  * Max serialized request body size accepted by the ingest endpoint: 50 KB.
@@ -137,6 +170,10 @@ interface ResolvedSettings {
   suppressWarnings: boolean;
   appVersion: string | undefined;
   buildNumber: string | undefined;
+  measureLaunch: boolean;
+  launchThresholdSeconds: number | undefined;
+  detectHangs: boolean;
+  captureUncaught: boolean;
 }
 
 /**
@@ -167,6 +204,10 @@ export class Trackless {
   /** Raw `appVersion` / `buildNumber` as configured, kept to compare repeat `configure()` calls. */
   private static appVersion: string | undefined = undefined;
   private static buildNumber: string | undefined = undefined;
+  private static measureLaunch = false;
+  private static launchThresholdSeconds: number | undefined = undefined;
+  private static detectHangs = false;
+  private static captureUncaught = false;
 
   private static enabled: boolean = false;
   private static destroyed = false;
@@ -186,6 +227,20 @@ export class Trackless {
   private static featureReach: FeatureReachTracker = new FeatureReachTracker();
   /** Per-session first-occurrence set backing error-reach `firstOccurrences` marking. Reset on session end. */
   private static errorReach: ErrorReachTracker = new ErrorReachTracker();
+  /**
+   * Open timers. Not replaced on `configure()`, so a timer started before the
+   * first configure survives it; a reconfigure discards them through
+   * `endCurrentSession()`.
+   */
+  private static timers: OpenTimers = new OpenTimers();
+  /** The `measureLaunch` probe. Never replaced, so it measures once per page load. */
+  private static launch: LaunchProbe = new LaunchProbe();
+  /** The `detectHangs` long-task observer, running only while the page is visible. */
+  private static hangs: HangObserver = new HangObserver();
+  /** The `captureUncaught` window listeners, attached only while recording. */
+  private static uncaught: UncaughtListener = new UncaughtListener();
+  /** One-shot flag: the reserved-prefix warning is logged once per page load. */
+  private static reservedPrefixWarned = false;
 
   private static flushTimer: ReturnType<typeof setInterval> | null = null;
   private static visibilityHandler: (() => void) | null = null;
@@ -224,6 +279,10 @@ export class Trackless {
         suppressWarnings: config.suppressWarnings ?? false,
         appVersion: config.appVersion,
         buildNumber: config.buildNumber,
+        measureLaunch: config.measureLaunch ?? false,
+        launchThresholdSeconds: Trackless.validThreshold(config.launchThresholdSeconds),
+        detectHangs: config.detectHangs ?? false,
+        captureUncaught: config.captureUncaught ?? false,
       };
 
       let reconfigured = false;
@@ -248,6 +307,10 @@ export class Trackless {
       Trackless.suppressWarnings = settings.suppressWarnings;
       Trackless.appVersion = settings.appVersion;
       Trackless.buildNumber = settings.buildNumber;
+      Trackless.measureLaunch = settings.measureLaunch;
+      Trackless.launchThresholdSeconds = settings.launchThresholdSeconds;
+      Trackless.detectHangs = settings.detectHangs;
+      Trackless.captureUncaught = settings.captureUncaught;
 
       Trackless.buffer = new EventBuffer();
       Trackless.circuitBreaker = new CircuitBreaker();
@@ -270,6 +333,14 @@ export class Trackless {
       Trackless.debug(
         `configured — env=${Trackless.environment} endpoint=${Trackless.endpoint} flush=${Trackless.flushIntervalSeconds}s`,
       );
+      if (
+        config.launchThresholdSeconds !== undefined &&
+        settings.launchThresholdSeconds === undefined
+      ) {
+        Trackless.warn(
+          "launchThresholdSeconds is not a positive number — trackless.launch is sent without a threshold",
+        );
+      }
 
       if (Trackless.enabled) {
         // Start session
@@ -280,6 +351,13 @@ export class Trackless {
         if (Trackless.autoScreenTracking) {
           Trackless.setupAutoScreenTracking();
         }
+        Trackless.startHangsIfVisible();
+        Trackless.startUncaughtIfWanted();
+      }
+      // After recording is set up: when `load` has already fired the launch is
+      // read, and sent, right here.
+      if (settings.measureLaunch) {
+        Trackless.launch.arm((seconds) => Trackless.deliverLaunch(seconds));
       }
     } catch {
       Trackless.enabled = false;
@@ -369,12 +447,19 @@ export class Trackless {
     }
   }
 
-  /** Record a performance measurement. */
+  /**
+   * Record a performance measurement.
+   *
+   * Names starting with `trackless.` are reserved for the metrics the SDK
+   * measures itself (`trackless.launch`, `trackless.hang`). Passing one logs a
+   * warning once per page load; the measurement is still sent.
+   */
   static performance(name: string, durationSeconds: number, thresholdSeconds?: number): void {
     try {
       if (!Trackless.canRecord()) return;
       const normalized = Trackless.normalizeName(name);
       if (!normalized) return;
+      Trackless.warnIfReserved(normalized);
       if (typeof durationSeconds !== "number" || durationSeconds < 0) return;
       if (
         thresholdSeconds !== undefined &&
@@ -396,6 +481,110 @@ export class Trackless {
     } catch {
       // Never throws
     }
+  }
+
+  /**
+   * Start a timer for a performance measurement.
+   *
+   * The name is normalized here, exactly as `performance()` normalizes its
+   * name, so `stopTimer("Checkout")` closes `startTimer("checkout")`. A name
+   * normalization rejects is ignored with the usual warning. Starting a name
+   * that is already open restarts it. At most 50 timers are open at once; a
+   * start past that is ignored, with one warning per session.
+   *
+   * Open timers live in memory only. **Session end discards every open
+   * timer** — the session ends when the page is hidden — as do
+   * `setEnabled(false)`, a `configure()` with changed settings and
+   * `destroy()`, so a timer never measures time the page spent hidden.
+   * Elapsed time comes from `performance.now()`.
+   */
+  static startTimer(name: string): void {
+    try {
+      const normalized = Trackless.normalizeName(name);
+      if (!normalized) return;
+      Trackless.warnIfReserved(normalized);
+      const result = Trackless.timers.start(normalized);
+      if (typeof result === "object" && result.shouldWarn) {
+        Trackless.warn(
+          `timer "${normalized}" not started — ${MAX_OPEN_TIMERS} timers are already open (logged once per session)`,
+        );
+      }
+    } catch {
+      // Never throws
+    }
+  }
+
+  /**
+   * Stop the timer `name` and send its elapsed time, in seconds, as
+   * `performance(name, elapsed, thresholdSeconds)`.
+   *
+   * Does nothing when no timer of that name is open: never started, already
+   * stopped or cancelled, or discarded when the session ended. An elapsed time
+   * below zero or above a day is dropped.
+   */
+  static stopTimer(name: string, thresholdSeconds?: number): void {
+    try {
+      const normalized = Trackless.normalizeField(name, EVENT_NAME_MAX_LENGTH);
+      if (!normalized) return;
+      const elapsed = Trackless.timers.stop(normalized);
+      if (elapsed === null) return;
+      Trackless.recordTimer(normalized, elapsed, thresholdSeconds);
+    } catch {
+      // Never throws
+    }
+  }
+
+  /**
+   * Drop the timer `name` without sending anything — the operation was
+   * abandoned, or failed in a way its duration should not describe.
+   */
+  static cancelTimer(name: string): void {
+    try {
+      const normalized = Trackless.normalizeField(name, EVENT_NAME_MAX_LENGTH);
+      if (normalized) Trackless.timers.cancel(normalized);
+    } catch {
+      // Never throws
+    }
+  }
+
+  /**
+   * Time `fn` and send its duration as a performance measurement, returning
+   * what `fn` returns.
+   *
+   * When `fn` returns a promise, the measurement covers the time until it
+   * settles and `measure()` returns a promise of the same value. The
+   * measurement is sent **only when `fn` returns, or its promise resolves**:
+   * if `fn` throws or the promise rejects, nothing is sent and the error
+   * reaches the caller unchanged. Nothing is sent when the session ended (the
+   * page was hidden) before `fn` finished. `measure()` does not use the
+   * open-timer map, so it never counts toward the 50-timer cap.
+   *
+   * ```typescript
+   * const feed = await Trackless.measure("feed_load", () => api.fetchFeed(), 2.0);
+   * ```
+   */
+  static measure<T>(name: string, fn: () => Promise<T>, thresholdSeconds?: number): Promise<T>;
+  static measure<T>(name: string, fn: () => T, thresholdSeconds?: number): T;
+  static measure<T>(
+    name: string,
+    fn: () => T | Promise<T>,
+    thresholdSeconds?: number,
+  ): T | Promise<T> {
+    let start: TimerStart | null = null;
+    try {
+      start = Trackless.timers.mark();
+    } catch {
+      // Never throws — fn still runs, unmeasured
+    }
+    const result = fn();
+    if (Trackless.isThenable(result)) {
+      return Promise.resolve(result).then((value) => {
+        Trackless.finishMeasure(name, start, thresholdSeconds);
+        return value;
+      });
+    }
+    Trackless.finishMeasure(name, start, thresholdSeconds);
+    return result;
   }
 
   /**
@@ -437,15 +626,18 @@ export class Trackless {
   }
 
   /**
-   * Shared path behind `error()` and `info()`: same normalization, PII guard,
-   * session-reach marker, depth increment and rollup key. `severity` is already
-   * mapped to one of the two stored levels, so the buffer's rollup key collapses
-   * one name reported at several legacy severities into a single entry.
+   * Shared path behind `error()`, `info()` and `captureUncaught`: same
+   * normalization, PII guard, session-reach marker and rollup key. `severity` is
+   * already mapped to one of the two stored levels, so the buffer's rollup key
+   * collapses one name reported at several legacy severities into a single
+   * entry. A developer's call (`fromSdk` false) warns on a reserved name and
+   * counts toward the session's depth; the SDK's own send does neither.
    */
   private static recordErrorEvent(
     name: string,
     severity: StoredSeverity,
     code: string | undefined,
+    fromSdk = false,
   ): void {
     try {
       if (!Trackless.canRecord()) return;
@@ -454,7 +646,10 @@ export class Trackless {
 
       const normalizedCode =
         code !== undefined ? Trackless.normalizeField(code, EVENT_NAME_MAX_LENGTH) : undefined;
-      Trackless.session.recordActivity();
+      if (!fromSdk) {
+        Trackless.warnIfReserved(normalized, severity);
+        Trackless.session.recordActivity();
+      }
       // Mark the first occurrence of this name within the session (reach
       // dedup). Keyed on the normalized name only — not name+severity+code — so
       // a session reporting one name at several codes contributes a single first
@@ -479,6 +674,161 @@ export class Trackless {
     }
   }
 
+  private static isThenable<T>(value: T | Promise<T>): value is Promise<T> {
+    return (
+      value !== null &&
+      (typeof value === "object" || typeof value === "function") &&
+      typeof (value as { then?: unknown }).then === "function"
+    );
+  }
+
+  /** Send the measurement for one `measure()` call whose `fn` finished normally. */
+  private static finishMeasure(
+    name: string,
+    start: TimerStart | null,
+    thresholdSeconds: number | undefined,
+  ): void {
+    try {
+      if (!start) return;
+      const elapsed = Trackless.timers.elapsedSince(start);
+      if (elapsed === null) return;
+      const normalized = Trackless.normalizeName(name);
+      if (!normalized) return;
+      Trackless.warnIfReserved(normalized);
+      Trackless.recordTimer(normalized, elapsed, thresholdSeconds);
+    } catch {
+      // Never throws
+    }
+  }
+
+  /**
+   * The send behind `stopTimer()` and `measure()`: `performance()` with an
+   * elapsed time the SDK measured, under a name that is already normalized.
+   */
+  private static recordTimer(
+    normalized: string,
+    elapsedSeconds: number,
+    thresholdSeconds: number | undefined,
+  ): void {
+    if (!Trackless.canRecord()) return;
+    if (!(elapsedSeconds >= 0 && elapsedSeconds <= MAX_TIMER_ELAPSED_SECONDS)) {
+      Trackless.warn(
+        `dropped performance "${normalized}" — timer elapsed time ${elapsedSeconds}s is outside 0–${MAX_TIMER_ELAPSED_SECONDS}s`,
+      );
+      return;
+    }
+    if (
+      thresholdSeconds !== undefined &&
+      (typeof thresholdSeconds !== "number" || thresholdSeconds <= 0)
+    )
+      return;
+
+    Trackless.session.recordActivity();
+    Trackless.addEvent({
+      type: "performance",
+      name: normalized,
+      duration: elapsedSeconds,
+      ...(thresholdSeconds !== undefined ? { threshold: thresholdSeconds } : {}),
+    });
+    Trackless.debug(
+      `performance — ${normalized} duration=${elapsedSeconds}s${thresholdSeconds !== undefined ? ` threshold=${thresholdSeconds}s` : ""} (timer)`,
+    );
+    Trackless.checkFlushThreshold();
+  }
+
+  /**
+   * Warn once per page load when a developer's normalized name has the
+   * reserved prefix. `kind` names the call in the message.
+   */
+  private static warnIfReserved(
+    normalized: string,
+    kind: "performance" | StoredSeverity = "performance",
+  ): void {
+    if (!normalized.startsWith(RESERVED_NAME_PREFIX) || Trackless.reservedPrefixWarned) return;
+    Trackless.reservedPrefixWarned = true;
+    Trackless.warn(
+      `${kind} name "${normalized}" starts with "${RESERVED_NAME_PREFIX}", which is reserved for names the SDK sends itself — sent anyway (logged once)`,
+    );
+  }
+
+  /** A positive, finite threshold, or undefined. */
+  private static validThreshold(value: number | undefined): number | undefined {
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  }
+
+  /** Recording, without the pre-configure warning `canRecord()` logs. */
+  private static isRecording(): boolean {
+    return Trackless.enabled && !Trackless.destroyed && Trackless.configured;
+  }
+
+  /**
+   * Send the launch time the probe measured — only while recording with
+   * `measureLaunch` on. A launch measured while recording is disabled, or
+   * after a reconfigure turned the option off, is dropped.
+   */
+  private static deliverLaunch(seconds: number): void {
+    try {
+      if (!Trackless.isRecording() || !Trackless.measureLaunch) return;
+      Trackless.recordSdkMetric(LAUNCH_METRIC, seconds, Trackless.launchThresholdSeconds);
+    } catch {
+      // Never throws
+    }
+  }
+
+  /** Start the long-task observer when `detectHangs` is on and the page is visible. */
+  private static startHangsIfVisible(): void {
+    if (!Trackless.detectHangs) return;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    Trackless.hangs.start((seconds) => {
+      if (Trackless.isRecording() && Trackless.detectHangs) {
+        Trackless.recordSdkMetric(HANG_METRIC, seconds, undefined);
+      }
+    });
+  }
+
+  /**
+   * Attach the `captureUncaught` listeners when the option is on. Each
+   * uncaught error or rejection is recorded as `error("trackless.uncaught",
+   * <name>)`; a name normalization rejects is sent as `unknown`.
+   */
+  private static startUncaughtIfWanted(): void {
+    if (!Trackless.captureUncaught) return;
+    Trackless.uncaught.start((code) => {
+      if (!Trackless.isRecording() || !Trackless.captureUncaught) return;
+      const normalizedCode =
+        Trackless.normalizeField(code, EVENT_NAME_MAX_LENGTH) ?? UNCAUGHT_UNKNOWN_CODE;
+      Trackless.recordErrorEvent(UNCAUGHT_ERROR, "error", normalizedCode, true);
+    });
+  }
+
+  /**
+   * Buffer one metric the SDK measured itself. Same bounds as a timer; no
+   * reserved-name warning, and no session activity — it describes the page,
+   * not anything the user did.
+   */
+  private static recordSdkMetric(
+    name: string,
+    seconds: number,
+    thresholdSeconds: number | undefined,
+  ): void {
+    if (!(seconds >= 0 && seconds <= MAX_TIMER_ELAPSED_SECONDS)) {
+      Trackless.warn(
+        `dropped performance "${name}" — measured ${seconds}s is outside 0–${MAX_TIMER_ELAPSED_SECONDS}s`,
+      );
+      return;
+    }
+    Trackless.addEvent({
+      type: "performance",
+      name,
+      duration: seconds,
+      ...(thresholdSeconds !== undefined ? { threshold: thresholdSeconds } : {}),
+    });
+    Trackless.debug(
+      `performance — ${name} duration=${seconds}s${thresholdSeconds !== undefined ? ` threshold=${thresholdSeconds}s` : ""} (SDK)`,
+    );
+    Trackless.checkFlushThreshold();
+  }
+
   /** Force flush pending events to the ingest endpoint. */
   static async flush(): Promise<void> {
     try {
@@ -498,6 +848,7 @@ export class Trackless {
       Trackless.enabled = isEnabled;
       if (!isEnabled) {
         // Drop the session rather than end it: an opt-out must not lead to a later send.
+        Trackless.timers.discardAll();
         Trackless.buffer.clear();
         Trackless.session.destroy();
         Trackless.funnels.clear();
@@ -506,6 +857,8 @@ export class Trackless {
         Trackless.stopPeriodicFlush();
         Trackless.removeVisibilityListener();
         Trackless.teardownAutoScreenTracking();
+        Trackless.hangs.stop();
+        Trackless.uncaught.stop();
       } else if (!Trackless.destroyed && Trackless.configured) {
         Trackless.startNewSession();
         Trackless.startPeriodicFlush();
@@ -513,6 +866,8 @@ export class Trackless {
         if (Trackless.autoScreenTracking) {
           Trackless.setupAutoScreenTracking();
         }
+        Trackless.startHangsIfVisible();
+        Trackless.startUncaughtIfWanted();
       }
     } catch {
       // Never throws
@@ -532,6 +887,8 @@ export class Trackless {
       Trackless.stopPeriodicFlush();
       Trackless.removeVisibilityListener();
       Trackless.teardownAutoScreenTracking();
+      Trackless.hangs.stop();
+      Trackless.uncaught.stop();
       Trackless.screenViewCooldowns.clear();
       Trackless.funnels.clear();
       Trackless.featureReach.clear();
@@ -561,7 +918,11 @@ export class Trackless {
       settings.debugLogging === Trackless.debugLogging &&
       settings.suppressWarnings === Trackless.suppressWarnings &&
       settings.appVersion === Trackless.appVersion &&
-      settings.buildNumber === Trackless.buildNumber
+      settings.buildNumber === Trackless.buildNumber &&
+      settings.measureLaunch === Trackless.measureLaunch &&
+      settings.launchThresholdSeconds === Trackless.launchThresholdSeconds &&
+      settings.detectHangs === Trackless.detectHangs &&
+      settings.captureUncaught === Trackless.captureUncaught
     );
   }
 
@@ -582,6 +943,8 @@ export class Trackless {
    * down so the new configuration installs its own.
    */
   private static retireRunningConfiguration(): void {
+    // The running configuration's timers end with it, recording or not.
+    Trackless.timers.discardAll();
     if (Trackless.enabled) {
       Trackless.endCurrentSession();
       Trackless.performFlush(false, Trackless.currentFlushTarget()).catch(() => {});
@@ -589,6 +952,8 @@ export class Trackless {
     Trackless.stopPeriodicFlush();
     Trackless.removeVisibilityListener();
     Trackless.teardownAutoScreenTracking();
+    Trackless.hangs.stop();
+    Trackless.uncaught.stop();
   }
 
   /** The running configuration's buffer and send settings, captured now. */
@@ -615,29 +980,54 @@ export class Trackless {
    * Normalize an event field (name, detail, step, code) into a valid format.
    * Strips PII, lowercases, replaces invalid chars with underscores, and validates.
    * Returns null if the result is empty or matches an abuse pattern.
+   *
+   * The abuse patterns run on the whole value before the PII strip as well as on
+   * the result: the phone pattern eats runs of digits inside a UUID or hex ID, and
+   * truncating can cut one short, either of which leaves a part no rule matches.
    */
   private static normalizeField(value: string, maxLength: number): string | null {
     if (typeof value !== "string") return null;
-    let result = Trackless.stripPII(value).toLowerCase();
-    // Replace runs of non-allowed chars with a single underscore
-    result = result.replace(/[^a-z0-9._-]+/g, "_");
-    // Trim leading/trailing underscores and dots
-    result = result.replace(/^[_.]+|[_.]+$/g, "");
-    // Collapse consecutive dots
-    result = result.replace(/\.{2,}/g, ".");
+    if (Trackless.isAbusePattern(Trackless.sanitizeField(value))) return null;
+    let result = Trackless.sanitizeField(Trackless.stripPII(value));
     if (!result) return null;
-    // Truncate to max length
-    if (result.length > maxLength) result = result.slice(0, maxLength);
-    // Reject abuse patterns
-    if (
-      Trackless.UUID_REGEX.test(result) ||
-      Trackless.LONG_HEX_REGEX.test(result) ||
-      Trackless.LONG_NUMERIC_REGEX.test(result) ||
-      Trackless.ALL_HEX_REGEX.test(result)
-    ) {
-      return null;
+    // Truncate to max length; a cut can leave a trailing `.`, which ingest rejects
+    if (result.length > maxLength) result = result.slice(0, maxLength).replace(/[_.]+$/, "");
+    return Trackless.isAbusePattern(result) ? null : result;
+  }
+
+  /** Lowercases and reduces a value to the characters and shape a field allows. */
+  private static sanitizeField(value: string): string {
+    return (
+      value
+        .toLowerCase()
+        // Replace runs of non-allowed chars with a single underscore
+        .replace(/[^a-z0-9._-]+/g, "_")
+        // Trim leading/trailing underscores and dots
+        .replace(/^[_.]+|[_.]+$/g, "")
+        // Collapse consecutive dots
+        .replace(/\.{2,}/g, ".")
+    );
+  }
+
+  /** True when a sanitized field looks like an identifier and must not be sent. */
+  private static isAbusePattern(value: string): boolean {
+    return (
+      Trackless.UUID_REGEX.test(value) ||
+      Trackless.LONG_HEX_REGEX.test(value) ||
+      Trackless.LONG_NUMERIC_REGEX.test(value) ||
+      Trackless.ALL_HEX_REGEX.test(value) ||
+      Trackless.hasRedactedIdResidue(value)
+    );
+  }
+
+  /** The PII marker beside 8+ characters of hex-only tokens: what remains of an ID. */
+  private static hasRedactedIdResidue(value: string): boolean {
+    if (!value.includes("redacted")) return false;
+    let hexChars = 0;
+    for (const token of value.split(/redacted|[-_.]+/)) {
+      if (/^[0-9a-f]+$/.test(token)) hexChars += token.length;
     }
-    return result;
+    return hexChars >= 8;
   }
 
   private static debug(msg: string): void {
@@ -658,38 +1048,52 @@ export class Trackless {
   /**
    * Strip PII patterns (emails, SSNs, phone numbers) from a string,
    * replacing matches with [REDACTED].
+   *
+   * Swift and Kotlin spell out what `\b` means in the SSN patterns, ASCII letters, digits and
+   * `_`, because their regex engines do not agree with it. Those patterns stay without the `u`
+   * flag, and nothing here uses lookbehind: it is a syntax error before Safari 16.4 and the SDK
+   * would not load.
    */
   private static stripPII(value: string): string {
     // Email addresses
-    let result = value.replace(
-      /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/gi,
+    let result = value.includes("@") ? value.replace(EMAIL_RE, "[REDACTED]") : value;
+    // SSN patterns (check before phone numbers to avoid false matches)
+    result = result.replace(/\b[0-9]{3}-[0-9]{2}-[0-9]{4}\b/g, "[REDACTED]");
+    result = result.replace(/\b[0-9]{9}\b/g, "[REDACTED]");
+    // Phone numbers: a digit, then 8+ mixed digit/separator chars, ending with a digit
+    result = result.replace(
+      // eslint-disable-next-line no-control-regex -- \x0B: the one spelling all four engines read as a vertical tab
+      /\+?[0-9][0-9\t\n\x0B\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF\-.()]{8,}[0-9]/g,
       "[REDACTED]",
     );
-    // SSN patterns (check before phone numbers to avoid false matches)
-    result = result.replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[REDACTED]");
-    result = result.replace(/\b\d{9}\b/g, "[REDACTED]");
-    // Phone numbers: a digit, then 8+ mixed digit/separator chars, ending with a digit
-    result = result.replace(/\+?\d[\d\s\-.()]{8,}\d/g, "[REDACTED]");
     return result;
   }
 
-  /** Matches UUID format: 8-4-4-4-12 hex with hyphens or underscores */
+  /**
+   * A UUID anywhere in the value, by its first four groups (8-4-4-4) so one with its
+   * tail cut off is found too, with any run of hyphens, underscores or dots between them
+   */
   private static readonly UUID_REGEX =
-    /^[0-9a-f]{8}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{12}$/;
-  /** Consecutive hex characters > 24 */
-  private static readonly LONG_HEX_REGEX = /[0-9a-f]{25,}/;
+    /[0-9a-f]{8}[-_.]+[0-9a-f]{4}[-_.]+[0-9a-f]{4}[-_.]+[0-9a-f]{4}/;
+  /** 24 or more consecutive hex characters anywhere in the value */
+  private static readonly LONG_HEX_REGEX = /[0-9a-f]{24,}/;
   /** Numeric-only strings > 12 characters */
   private static readonly LONG_NUMERIC_REGEX = /^[0-9]{13,}$/;
   /** Entirely hex characters and longer than 16 characters */
   private static readonly ALL_HEX_REGEX = /^[0-9a-f]{17,}$/;
 
-  /** UUID in a URL path segment (8-4-4-4-12 hex with hyphens) */
-  private static readonly EMBEDDED_UUID_RE =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   /** 6+ digit numeric ID in a URL path segment */
   private static readonly LONG_NUMERIC_RE = /^\d{6,}$/;
   /** 12+ hex chars in a URL path segment (MongoDB ObjectIDs, short hashes) */
   private static readonly LONG_HEX_RE = /^[0-9a-f]{12,}$/i;
+
+  /**
+   * Lowercase words of 1-20 letters with up to 3 trailing digits, joined by one `-` or `_`.
+   * A word after the first may instead be a number of up to 4 digits.
+   */
+  private static readonly ANCHOR_RE =
+    /^[a-z]{1,20}[0-9]{0,3}(?:[-_](?:[a-z]{1,20}[0-9]{0,3}|[0-9]{1,4}))*$/;
+  private static readonly ANCHOR_MAX_LENGTH = 64;
 
   private static normalizeName(name: string): string | null {
     const normalized = Trackless.normalizeField(name, EVENT_NAME_MAX_LENGTH);
@@ -709,6 +1113,10 @@ export class Trackless {
   }
 
   private static endCurrentSession(): void {
+    // Before the session check: a reconfigure or destroy() after
+    // setEnabled(false) has no session to end, but may still hold timers
+    // started since.
+    Trackless.timers.discardAll();
     const result = Trackless.session.end();
     if (result) {
       Trackless.funnels.clear();
@@ -832,10 +1240,12 @@ export class Trackless {
 
     Trackless.visibilityHandler = () => {
       if (document.visibilityState === "hidden") {
+        Trackless.hangs.stop();
         Trackless.endCurrentSession();
         Trackless.performFlush(true).catch(() => {});
       } else if (document.visibilityState === "visible") {
         Trackless.startNewSession();
+        Trackless.startHangsIfVisible();
       }
     };
 
@@ -910,10 +1320,10 @@ export class Trackless {
 
       if (!EVENT_NAME_REGEX.test(screenName)) return;
 
-      // Extract hash fragment as detail (e.g., "#pricing" → "pricing")
+      // A plain anchor becomes the detail ("#pricing" → "pricing"); any other hash is left out
       const hash =
         typeof window !== "undefined" ? (window.location.hash ?? "").replace(/^#/, "") : "";
-      const detail = hash || undefined;
+      const detail = Trackless.isPlainAnchor(hash) ? hash : undefined;
 
       // Per-route deduplication keyed on name+detail
       const cooldownKey = detail ? `${screenName}|${detail}` : screenName;
@@ -930,10 +1340,24 @@ export class Trackless {
     }
   }
 
-  /** Replace dynamic URL segments (UUIDs, long numeric IDs, long hex strings) with `-id-` */
+  /**
+   * Whether a URL hash reads as a section anchor. Browsers never send a hash to a
+   * server, so it is where sign-in tokens, share keys and recovery links go, and the
+   * SDK must not be what sends one. The shape is an allowlist because a left-out hash
+   * costs little: the view still counts on its bare name, under that name's cooldown.
+   */
+  private static isPlainAnchor(hash: string): boolean {
+    return hash.length <= Trackless.ANCHOR_MAX_LENGTH && Trackless.ANCHOR_RE.test(hash);
+  }
+
+  /**
+   * Replace dynamic URL segments with `-id-`: anything the abuse patterns would
+   * reject, so `/users/user-<uuid>/profile` is still counted as a view, plus the
+   * shorter numeric and hex IDs below.
+   */
   private static stripDynamicSegments(segments: string[]): string[] {
     return segments.map((seg) => {
-      if (Trackless.EMBEDDED_UUID_RE.test(seg)) return "-id-";
+      if (Trackless.isAbusePattern(seg.toLowerCase())) return "-id-";
       if (Trackless.LONG_NUMERIC_RE.test(seg)) return "-id-";
       if (Trackless.LONG_HEX_RE.test(seg)) return "-id-";
       return seg;

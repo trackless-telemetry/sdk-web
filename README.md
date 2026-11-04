@@ -131,12 +131,18 @@ Trackless.configure({
   flushIntervalSeconds: 60, // Optional — how often buffered events are sent
   debugLogging: false, // Optional — enable debug logging for happy-path events
   suppressWarnings: false, // Optional — suppress warning and error logging
+  measureLaunch: true, // Optional — send trackless.launch once per page load (off by default)
+  launchThresholdSeconds: 2.0, // Optional — threshold for trackless.launch
+  detectHangs: true, // Optional — send trackless.hang for each long task of 250 ms or more, Chromium only (off by default)
+  captureUncaught: true, // Optional — count uncaught errors as trackless.uncaught (off by default)
 });
 ```
 
+`measureLaunch`, `detectHangs` and `captureUncaught` are **off by default**; if your privacy notice lists what you measure, add what you turn on. [GUIDE.md](GUIDE.md) defines what each measures and what it misses.
+
 **Environment:** When `environment` is not set, the SDK uses `"sandbox"` on a local-development host -- `localhost`, any `*.localhost`, a `127.x.x.x` address, `[::1]` or `0.0.0.0` -- and `"production"` everywhere else. An explicit value always wins, including `"production"` on localhost. Nothing else counts as local: LAN and private IPs (`192.168.x.x`, `10.x.x.x`), `.local` and `.test` hosts, staging, preview deploys, and Electron or other `file:` pages all default to `"production"`, so set `environment: "sandbox"` explicitly there. The hostname is only compared in memory; it is never sent or stored.
 
-**Auto screen tracking:** When enabled, the SDK automatically records view events from `history.pushState()`, `popstate`, and `hashchange` events with per-route deduplication (60-second cooldown). Hash fragments are captured as the detail parameter.
+**Auto screen tracking:** When enabled, the SDK automatically records view events from `history.pushState()`, `popstate`, and `hashchange` events with per-route deduplication (60-second cooldown). A hash that is a plain anchor (`#pricing`) is captured as the detail parameter; any other hash is left out, including a sign-in token in a redirect URL (`#access_token=...`). See [GUIDE.md](GUIDE.md) for the exact shape and what it cannot catch.
 
 ### Event Methods
 
@@ -150,6 +156,12 @@ All methods are static, non-blocking, non-throwing, and safe to call from any co
 | `Trackless.performance(name: string, durationSeconds: number, thresholdSeconds?: number)` | Timing measurement (seconds)                                                                                       |
 | `Trackless.error(name: string, code?: string)`                                            | Something went wrong — counts toward errors per session and every alert                                            |
 | `Trackless.info(name: string, detail?: string)`                                           | Something worth counting that the user did not do and that did not go wrong — never counts toward errors or alerts |
+| `Trackless.startTimer(name: string)`                                                      | Start a timer; starting an open name restarts it (at most 50 open)                                                 |
+| `Trackless.stopTimer(name: string, thresholdSeconds?: number)`                            | Stop it and send the elapsed seconds as `performance()`; nothing if no timer is open                               |
+| `Trackless.cancelTimer(name: string)`                                                     | Drop it and send nothing                                                                                           |
+| `Trackless.measure(name: string, fn, thresholdSeconds?: number)`                          | Time `fn` (sync or returning a promise) and return its result; sends only when it returns or resolves              |
+
+Session end (the page becoming hidden) discards every open timer, so a timer never measures time the tab spent hidden.
 
 ### Control Methods
 
@@ -194,7 +206,7 @@ All event fields (`name`, `detail`, `step`, `code`) are automatically normalized
 - **Auto-lowercase:** fields are lowercased (`Export_Clicked` -> `export_clicked`)
 - **Trim/collapse:** leading/trailing `_`/`.` trimmed, consecutive dots collapsed
 - **Truncate:** fields are truncated to 100 characters
-- **No identifiers:** UUIDs, long hex strings, and long numeric strings are rejected
+- **No identifiers:** a UUID or 24+ hex characters anywhere in a field, and long hex-only or numeric-only values, are rejected
 - **PII stripping:** emails, phone numbers, and SSN patterns are stripped from all fields
 
 ## How It Works
@@ -221,7 +233,7 @@ The SDK captures a small set of **coarse, non-identifying** dimensions:
 | `language`    | `"en"`        | `navigator.language` (ISO 639-1 code)                     |
 | `appVersion`  | `"2.1.0"`     | Developer-provided via config                             |
 | `buildNumber` | `"142"`       | Developer-provided via config                             |
-| `sdkVersion`  | `"web/0.5.1"` | SDK platform and version identifier                       |
+| `sdkVersion`  | `"web/0.6.0"` | SDK platform and version identifier                       |
 
 ## What Trackless Does NOT Collect
 
@@ -231,8 +243,8 @@ The SDK captures a small set of **coarse, non-identifying** dimensions:
 - No cross-session linking -- all session state is in-memory only
 - No data sent to third parties -- events go only to your configured endpoint
 - No full user agent strings, exact screen dimensions, or hardware identifiers
-- No stack traces, crash logs, or error messages -- error and info tracking uses only developer-defined names and codes
-- No individual performance measurements stored -- durations are aggregated server-side into statistical digests
+- No stack traces, crash logs, or error messages -- error and info tracking uses only developer-defined names and codes; with `captureUncaught` on, the SDK adds a count of uncaught errors by name, and nothing else about them
+- No performance measurement stored as its own record -- durations are aggregated server-side into statistical digests, though a row with very few samples approximates their values
 - PII auto-stripping of email addresses, phone numbers, and SSN patterns from all event fields
 
 ## Zero Client Persistence
