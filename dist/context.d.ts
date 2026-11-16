@@ -8,7 +8,22 @@ import type { Environment, EventContext } from "./types.js";
  * - NEVER uses IP-based geolocation (Invariant 4)
  * - Region derived from navigator.languages / navigator.language only
  */
-export declare function detectContext(appVersion?: string, buildNumber?: string): EventContext;
+export declare function detectContext(appVersion?: string, buildNumber?: string, onOmitted?: (field: OmittableContextField) => void): EventContext;
+/** The context fields ingest rejects a whole payload over, and the SDK leaves out instead. */
+export type OmittableContextField = "appVersion" | "buildNumber" | "osVersion";
+/**
+ * Leave out any of `appVersion`, `buildNumber` and `osVersion` that ingest
+ * would reject. Ingest validates the whole payload, so one bad value (an empty
+ * string from an unset env var, `"1.0 (42)"`) would cost the app every batch;
+ * without the field the batch is accepted and only that dimension is missing.
+ *
+ * Pure, and exported for tests only (not part of the public entry). `omitted`
+ * names the fields, never their values.
+ */
+export declare function omitInvalidContext(context: EventContext): {
+    context: EventContext;
+    omitted: OmittableContextField[];
+};
 /**
  * Whether a page hostname names this machine: a loopback or reserved-local
  * host, where a page is almost certainly a developer's local build.

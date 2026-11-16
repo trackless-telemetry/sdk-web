@@ -4,7 +4,6 @@ import { EventBuffer } from "./eventBuffer.js";
 import { CircuitBreaker } from "./circuitBreaker.js";
 import { defaultEnvironment, detectContext } from "./context.js";
 import { SessionManager } from "./session.js";
-import { FunnelTracker } from "./funnel.js";
 import { FeatureReachTracker } from "./featureReach.js";
 import { ErrorReachTracker } from "./errorReach.js";
 import { OpenTimers, MAX_OPEN_TIMERS, MAX_TIMER_ELAPSED_SECONDS } from "./timers.js";
@@ -222,7 +221,6 @@ export class Trackless {
   private static circuitBreaker: CircuitBreaker = new CircuitBreaker();
   private static context: EventContext = { platform: "web" };
   private static session: SessionManager = new SessionManager();
-  private static funnels: FunnelTracker = new FunnelTracker();
   /** Per-session first-use set backing feature-reach `firstUses` marking. Reset on session end. */
   private static featureReach: FeatureReachTracker = new FeatureReachTracker();
   /** Per-session first-occurrence set backing error-reach `firstOccurrences` marking. Reset on session end. */
@@ -314,9 +312,14 @@ export class Trackless {
 
       Trackless.buffer = new EventBuffer();
       Trackless.circuitBreaker = new CircuitBreaker();
-      Trackless.context = detectContext(settings.appVersion, settings.buildNumber);
+      Trackless.context = detectContext(settings.appVersion, settings.buildNumber, (field) =>
+        Trackless.warn(
+          field === "osVersion"
+            ? "osVersion could not be read as a version number — left out of every payload"
+            : `${field} is not 1–50 letters, digits, ".", "_" or "-" — left out of every payload; pass a valid value, or omit the option`,
+        ),
+      );
       Trackless.session = new SessionManager();
-      Trackless.funnels = new FunnelTracker();
       Trackless.featureReach = new FeatureReachTracker();
       Trackless.errorReach = new ErrorReachTracker();
       Trackless.screenViewCooldowns = new Map();
@@ -419,7 +422,7 @@ export class Trackless {
     }
   }
 
-  /** Record a funnel step. */
+  /** Record a funnel step. Every call is counted, including a step index already sent this session. */
   static funnel(funnelName: string, stepIndex: number, stepName: string): void {
     try {
       if (!Trackless.canRecord()) return;
@@ -428,11 +431,8 @@ export class Trackless {
       const normalizedStep = Trackless.normalizeName(stepName);
       if (!normalizedFunnel || !normalizedStep) return;
 
-      if (!Trackless.funnels.step(normalizedFunnel, stepIndex)) {
-        Trackless.debug(`funnel — ${normalizedFunnel}/${normalizedStep} (duplicate, skipped)`);
-        return;
-      }
-
+      // Every call counts: no per-session deduplication, and each call is its
+      // own event (funnels are never rolled up — ingest rejects count > 1).
       Trackless.session.recordActivity();
       Trackless.addEvent({
         type: "funnel",
@@ -851,7 +851,6 @@ export class Trackless {
         Trackless.timers.discardAll();
         Trackless.buffer.clear();
         Trackless.session.destroy();
-        Trackless.funnels.clear();
         Trackless.featureReach.clear();
         Trackless.errorReach.clear();
         Trackless.stopPeriodicFlush();
@@ -890,7 +889,6 @@ export class Trackless {
       Trackless.hangs.stop();
       Trackless.uncaught.stop();
       Trackless.screenViewCooldowns.clear();
-      Trackless.funnels.clear();
       Trackless.featureReach.clear();
       Trackless.errorReach.clear();
       Trackless.session.destroy();
@@ -1119,7 +1117,6 @@ export class Trackless {
     Trackless.timers.discardAll();
     const result = Trackless.session.end();
     if (result) {
-      Trackless.funnels.clear();
       Trackless.featureReach.clear();
       Trackless.errorReach.clear();
       Trackless.addEvent({

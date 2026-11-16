@@ -5,6 +5,16 @@ All notable changes to the Trackless Telemetry Web SDK will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-11-16
+
+### Changed
+
+- **Funnel steps are no longer deduplicated per session; every call counts.** `funnel()` used to drop a step index it had already sent in the current session, so a flow repeated in one session counted once. Now each call is sent and counted, in the same session or a later one, the way `feature()` is. Call `funnel()` when the step happens (the click, the completed action), not when a page or component renders or re-mounts. Apps with repeated flows will see higher step counts, a shift in conversion, and more metered events after upgrading. Each call is still its own event with no `count`, so the wire format is unchanged. When upgrading, search the app for `funnel(` calls in a component render, mount, `useEffect` / `onMounted`, route guard or data re-fetch and move each into the code for the action that completes the step.
+
+### Fixed
+
+- **An invalid `appVersion` or `buildNumber` is left out instead of costing the app every batch.** Ingest validates the whole payload, so a value that is empty (often an unset environment variable), is not a string, or holds anything but letters, digits, `.`, `_` and `-` (1–50 characters) used to make every flush fail with a 400 and the SDK drop it. `configure()` now checks both values, and the `osVersion` it derives, against ingest's rules, leaves a failing one out of every payload and logs one warning that names the field, not its value. Events are then counted with no version on them until the value is fixed. The `value || undefined` guard is no longer needed.
+
 ## [0.6.0] - 2026-11-04
 
 ### Added

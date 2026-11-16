@@ -9,7 +9,6 @@ import { Trackless, Severity } from "../src/Trackless.js";
 import type { TracklessConfig } from "../src/types.js";
 import { EventBuffer } from "../src/eventBuffer.js";
 import { CircuitBreaker } from "../src/circuitBreaker.js";
-import { FunnelTracker } from "../src/funnel.js";
 import { FeatureReachTracker } from "../src/featureReach.js";
 import { ErrorReachTracker } from "../src/errorReach.js";
 import { SessionManager } from "../src/session.js";
@@ -1386,28 +1385,98 @@ describe("Session Management", () => {
   });
 });
 
-// ─── 13. Funnel Tracking (3 tests) ──────────────────────────────────────────
+// ─── 13. Funnel Tracking: every call counts (4 tests) ────────────────────────
 
 describe("Funnel Tracking", () => {
-  it("FunnelTracker accepts explicit step indices", () => {
-    const tracker = new FunnelTracker();
-    expect(tracker.step("checkout", 0)).toBe(true);
-    expect(tracker.step("checkout", 1)).toBe(true);
-    expect(tracker.step("checkout", 2)).toBe(true);
+  /** All funnel events sent so far, across every request. */
+  function sentFunnelEvents(): any[] {
+    return fetchSpy.mock.calls
+      .flatMap((call: any) => JSON.parse(call[1].body).events)
+      .filter((e: any) => e.type === "funnel");
+  }
+
+  function setVisibility(value: "hidden" | "visible"): void {
+    Object.defineProperty(document, "visibilityState", {
+      value,
+      writable: true,
+      configurable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }
+
+  it("the same step index three times in one session buffers three events", async () => {
+    configure();
+    await Trackless.flush(); // drain session:start
+    fetchSpy.mockClear();
+    const activitySpy = vi.spyOn(SessionManager.prototype, "recordActivity");
+
+    Trackless.funnel("breathing", 0, "start");
+    Trackless.funnel("breathing", 0, "start");
+    Trackless.funnel("breathing", 0, "start");
+
+    expect(activitySpy).toHaveBeenCalledTimes(3);
+    await Trackless.flush();
+
+    const events = sentFunnelEvents();
+    expect(events).toHaveLength(3);
+    for (const e of events) {
+      expect(e).toMatchObject({ type: "funnel", name: "breathing", step: "start", stepIndex: 0 });
+    }
   });
 
-  it("FunnelTracker deduplicates repeated step indices", () => {
-    const tracker = new FunnelTracker();
-    expect(tracker.step("checkout", 0)).toBe(true);
-    expect(tracker.step("checkout", 0)).toBe(false);
+  it("steps sent on both sides of a session end are all sent", async () => {
+    configure();
+    await Trackless.flush(); // drain session:start
+    fetchSpy.mockClear();
+
+    Trackless.funnel("checkout", 0, "cart");
+    Trackless.funnel("checkout", 1, "payment");
+
+    setVisibility("hidden"); // ends session 1 and flushes
+    await vi.advanceTimersByTimeAsync(0);
+    setVisibility("visible"); // starts session 2
+
+    Trackless.funnel("checkout", 0, "cart");
+    Trackless.funnel("checkout", 1, "payment");
+    await Trackless.flush();
+
+    const sent = fetchSpy.mock.calls.flatMap((call: any) => JSON.parse(call[1].body).events);
+    const order = sent
+      .filter((e: any) => e.type === "funnel" || (e.type === "session" && e.name !== "duration"))
+      .map((e: any) => (e.type === "funnel" ? `step${e.stepIndex}` : `session:${e.name}`));
+    expect(order).toEqual(["step0", "step1", "session:end", "session:start", "step0", "step1"]);
   });
 
-  it("FunnelTracker tracks independent funnels", () => {
-    const tracker = new FunnelTracker();
-    expect(tracker.step("checkout", 0)).toBe(true);
-    expect(tracker.step("onboarding", 0)).toBe(true);
-    expect(tracker.step("checkout", 1)).toBe(true);
-    expect(tracker.step("onboarding", 1)).toBe(true);
+  it("no funnel event carries count, however often a step repeats", async () => {
+    configure();
+    await Trackless.flush();
+    fetchSpy.mockClear();
+
+    for (let i = 0; i < 5; i++) Trackless.funnel("checkout", 2, "confirm");
+    Trackless.feature("export_clicked");
+    Trackless.feature("export_clicked");
+    await Trackless.flush();
+
+    const events = sentFunnelEvents();
+    expect(events).toHaveLength(5);
+    for (const e of events) expect(e.count).toBeUndefined();
+    // The same flush still rolls up features.
+    const sent = JSON.parse(fetchSpy.mock.calls[0][1].body).events;
+    expect(sent.find((e: any) => e.type === "feature").count).toBe(2);
+  });
+
+  it("the buffer never rolls up identical funnel events", () => {
+    const buffer = new EventBuffer();
+    for (let i = 0; i < 3; i++) {
+      expect(buffer.add({ type: "funnel", name: "checkout", step: "cart", stepIndex: 0 })).toBe(
+        true,
+      );
+    }
+
+    expect(buffer.totalSize).toBe(3);
+    const events = buffer.drain("production", { platform: "web" })[0].events;
+    expect(events).toHaveLength(3);
+    for (const e of events) expect(e.count).toBeUndefined();
   });
 });
 
@@ -2805,5 +2874,60 @@ describe("Opt-out with setEnabled", () => {
     const sessions = sessionEvents();
     expect(sessions.map((e) => e.name)).toEqual(["start", "end"]);
     expect(sessions[1].stepIndex).toBe(1); // only the event recorded after opting back in
+  });
+});
+
+// ─── Invalid context values are left out, not sent ──────────────────────────
+
+describe("Invalid context values", () => {
+  async function flushedContext(): Promise<Record<string, unknown>> {
+    Trackless.feature("export_clicked");
+    await Trackless.flush();
+    return JSON.parse(fetchSpy.mock.calls[0][1].body).context;
+  }
+
+  it("omits an empty appVersion and a buildNumber with a space, and warns once per field", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    configure({ appVersion: "", buildNumber: "1.0 (42)" });
+    const context = await flushedContext();
+
+    expect("appVersion" in context).toBe(false);
+    expect("buildNumber" in context).toBe(false);
+    const warns = warnSpy.mock.calls.map((c) => String(c[0]));
+    expect(warns.filter((w) => w.includes("appVersion is not")).length).toBe(1);
+    expect(warns.filter((w) => w.includes("buildNumber is not")).length).toBe(1);
+    // The warning names the field, never the value.
+    expect(warns.some((w) => w.includes("1.0 (42)"))).toBe(false);
+  });
+
+  it("keeps valid values and warns about neither", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    configure({ appVersion: "2.4.1-beta_3", buildNumber: "42" });
+    const context = await flushedContext();
+
+    expect(context.appVersion).toBe("2.4.1-beta_3");
+    expect(context.buildNumber).toBe("42");
+    expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("left out"))).toBe(false);
+  });
+
+  it("omits a value that is not a string", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    configure({ buildNumber: 42 as unknown as string });
+    const context = await flushedContext();
+
+    expect("buildNumber" in context).toBe(false);
+  });
+
+  it("suppressWarnings silences the warning and still omits the value", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    configure({ appVersion: "v 1", suppressWarnings: true });
+    const context = await flushedContext();
+
+    expect("appVersion" in context).toBe(false);
+    expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("[Trackless]"))).toBe(false);
   });
 });

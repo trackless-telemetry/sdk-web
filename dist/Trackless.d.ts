@@ -66,7 +66,6 @@ export declare class Trackless {
     private static circuitBreaker;
     private static context;
     private static session;
-    private static funnels;
     /** Per-session first-use set backing feature-reach `firstUses` marking. Reset on session end. */
     private static featureReach;
     /** Per-session first-occurrence set backing error-reach `firstOccurrences` marking. Reset on session end. */
@@ -109,7 +108,7 @@ export declare class Trackless {
     static view(name: string, detail?: string): void;
     /** Record a feature usage event. */
     static feature(name: string, detail?: string): void;
-    /** Record a funnel step. */
+    /** Record a funnel step. Every call is counted, including a step index already sent this session. */
     static funnel(funnelName: string, stepIndex: number, stepName: string): void;
     /**
      * Record a performance measurement.

@@ -10,9 +10,9 @@
  * that exercises several detail variants of one feature still contributes a
  * single first use.
  *
- * Zero persistence — all state is in-memory only. Cleared on session end
- * (mirrors {@link FunnelTracker}); it deliberately SURVIVES buffer flushes so a
- * feature used once but flushed mid-session is not re-marked as a first use.
+ * Zero persistence — all state is in-memory only. Cleared on session end; it
+ * deliberately SURVIVES buffer flushes so a feature used once but flushed
+ * mid-session is not re-marked as a first use.
  */
 export class FeatureReachTracker {
   /** Set of normalized feature names already seen this session */

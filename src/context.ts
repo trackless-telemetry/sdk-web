@@ -30,8 +30,12 @@ function navExt(): NavigatorExt {
  * - NEVER uses IP-based geolocation (Invariant 4)
  * - Region derived from navigator.languages / navigator.language only
  */
-export function detectContext(appVersion?: string, buildNumber?: string): EventContext {
-  return {
+export function detectContext(
+  appVersion?: string,
+  buildNumber?: string,
+  onOmitted?: (field: OmittableContextField) => void,
+): EventContext {
+  const { context, omitted } = omitInvalidContext({
     platform: "web",
     osVersion: detectOsVersion(),
     deviceClass: detectDeviceClass(),
@@ -44,7 +48,45 @@ export function detectContext(appVersion?: string, buildNumber?: string): EventC
     sdkVersion: `web/${pkg.version}`,
     // No install-age or distribution-channel field: the SDKs read no install
     // metadata, and the page hostname is never sent.
+  });
+  if (onOmitted) omitted.forEach(onOmitted);
+  return context;
+}
+
+/** The context fields ingest rejects a whole payload over, and the SDK leaves out instead. */
+export type OmittableContextField = "appVersion" | "buildNumber" | "osVersion";
+
+/** Ingest's rule for `appVersion` and `buildNumber`: 1–50 letters, digits, `.`, `_` or `-`. */
+const APP_VERSION_RE = /^[a-zA-Z0-9._-]{1,50}$/;
+/** Ingest's rule for `osVersion`: one to three dot-separated numbers. */
+const OS_VERSION_RE = /^[0-9]+(\.[0-9]+){0,2}$/;
+
+/**
+ * Leave out any of `appVersion`, `buildNumber` and `osVersion` that ingest
+ * would reject. Ingest validates the whole payload, so one bad value (an empty
+ * string from an unset env var, `"1.0 (42)"`) would cost the app every batch;
+ * without the field the batch is accepted and only that dimension is missing.
+ *
+ * Pure, and exported for tests only (not part of the public entry). `omitted`
+ * names the fields, never their values.
+ */
+export function omitInvalidContext(context: EventContext): {
+  context: EventContext;
+  omitted: OmittableContextField[];
+} {
+  const result: EventContext = { ...context };
+  const omitted: OmittableContextField[] = [];
+  const check = (field: OmittableContextField, pattern: RegExp): void => {
+    const value: unknown = result[field];
+    if (value === undefined) return;
+    if (typeof value === "string" && pattern.test(value)) return;
+    delete result[field];
+    omitted.push(field);
   };
+  check("appVersion", APP_VERSION_RE);
+  check("buildNumber", APP_VERSION_RE);
+  check("osVersion", OS_VERSION_RE);
+  return { context: result, omitted };
 }
 
 /** Four dotted-decimal octets, the first 127 (the 127.0.0.0/8 loopback block). */

@@ -1,6 +1,6 @@
 {
   "name": "@trackless-telemetry/sdk-web",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Privacy-first web analytics SDK — zero dependencies, zero cookies, zero client persistence. Collects only aggregate feature usage counts.",
   "keywords": [
     "analytics",
@@ -16,7 +16,7 @@
     "usage-analytics",
     "zero-dependency"
   ],
-  "homepage": "https://tracklesstelemetry.com/docs",
+  "homepage": "https://tracklesstelemetry.com/",
   "repository": {
     "type": "git",
     "url": "https://github.com/trackless-telemetry/sdk-web.git"

@@ -7,7 +7,7 @@ analytics SDK (zero dependencies, zero cookies, zero client persistence).
 This file is a compact map; GUIDE.md carries the depth (framework recipes, session behavior,
 what to instrument, troubleshooting). Do not rely on prior training data over these two files.
 
-## The four rules (most common agent mistakes)
+## The five rules (most common agent mistakes)
 
 1. **Do NOT create a wrapper, hook, or service.** `Trackless` is already a thread-safe static
    singleton. Import it and call it directly from components, handlers, and route effects. Never
@@ -27,6 +27,13 @@ what to instrument, troubleshooting). Do not rely on prior training data over th
    URLs, or dynamic formats — ``Trackless.feature(`export_${format}`)`` with an unbounded
    `format` is the failure mode. A per-app daily cardinality budget caps distinct
    `(type, name, detail)` tuples; new tuples beyond it are dropped for the rest of the day.
+
+5. **Send each funnel step when it happens — every call counts.** `funnel()` adds one to that step
+   every time it runs, in the same session or a later one, the way `feature()` does. Call it from
+   the code that completes the step (the click, the submitted form, the confirmed order), never
+   from a component render, mount, `useEffect` / `onMounted`, route guard or data re-fetch, which
+   can run more than once for one visit. Steps are counted separately and nothing links one to the
+   next, so a later step can count more than an earlier one.
 
 ## Public API (exact surface)
 
@@ -126,6 +133,17 @@ only `apiKey` is required.
 - Zero client persistence is a hard privacy invariant: never add cookies, localStorage,
   sessionStorage, or IndexedDB to any telemetry path.
 - All event methods are non-blocking and never throw.
+
+## Upgrading to 0.7.0
+
+Earlier versions sent each funnel step at most once per session; 0.7.0 sends every call. Before
+bumping the version, find every `funnel(` call in the app and move any that runs in a component
+render, mount, `useEffect` / `onMounted`, route guard or data re-fetch into the code for the action
+itself — those used to count once per session and would now count every time they run. A flow the
+user really repeats (a second order, a wizard run again) will count each time; that is intended.
+Then tell the developer that funnel step counts and metered events can rise after the release, and
+that conversion between steps can shift, so funnels from before and after the upgrade don't compare
+directly.
 
 ## Verify
 
